@@ -7,6 +7,10 @@ export const RECORD_URL = N8N + "mbm-record";
 export const AI_URL = N8N + "mbm-ai";
 export const PORTAL_URL = N8N + "mbm-portal";
 export const PORTAL_ACTION_URL = N8N + "mbm-portal-action";
+export const PORTAL_SIGNED_URL = N8N + "mbm-portal-signed";
+export const PORTAL_ACTION_SIGNED_URL = N8N + "mbm-portal-action-signed";
+/** Clerk publishable key (public by design). Set in Netlify; when it is empty the portal keeps the private-link mode. */
+export const CLERK_KEY: string = (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined) || "";
 export const FORM_INFO_URL = N8N + "mbm-form";
 export const FORM_URL = N8N + "mbm-lead";
 export const PASS_HEADER = "X-Studio-Key";
@@ -58,12 +62,13 @@ export interface Report { id: number; month: string; created_at: string; shared_
 export interface ContractItem { id: number; kind: Kind; label: string; per_month: number; note: string }
 export interface Health { level: "warn" | "info"; text: string }
 export interface Onboarding { [key: string]: boolean | string }
+export interface PortalPerson { id: number; email: string; name: string; role: "approver" | "viewer"; active: boolean; invited_at: string; last_seen_at: string }
 export interface Payment { month: string; amount: number; received: string }
 export interface Client {
   id: number; client_key: string; name: string; business: string; license_name: string; license_title: string; brokerage: string; team_name: string; market: string;
   platforms: string[]; handles: Record<string, string>; alert_email: string; alert_leads: boolean; status: "active" | "paused" | "ended" | "removed";
   start_date: string; renew_date: string; renew_in_days: number | null; fee: number; voice: string; approved_claims: string; disclosures: string; onboarding: Onboarding; notes: string;
-  broker_contact: string; sop_url: string; fair_housing_url: string; payments: Payment[];
+  broker_contact: string; sop_url: string; fair_housing_url: string; payments: Payment[]; people?: PortalPerson[];
   portal_url: string; form_url: string; contract: ContractItem[]; progress: Progress[]; content: Piece[]; leads: Lead[]; funnel: Funnel;
   reviews: { stats: ReviewStats; list: Review[]; requests: { id: number; contact: string; date: string; reviewer: string }[] };
   results: Results; tests: Test[]; reports: Report[]; health: Health[];
@@ -132,6 +137,7 @@ export const api = {
   saveContent: (client_key: string, content: Partial<Piece>, id?: number) => agencyPost(ACTION_URL, { action: "content_save", client_key, content, id }),
   setStatus: (id: number, status: ContentStatus, extra: { by?: string; post_url?: string; facts_checked?: boolean } = {}) => agencyPost(ACTION_URL, { action: "content_status", id, status, ...extra }),
   portalKey: (client_key: string, mode: "new" | "off") => agencyPost(ACTION_URL, { action: "portal_key", client_key, mode }),
+  savePerson: (client_key: string, person: Partial<PortalPerson>) => agencyPost(ACTION_URL, { action: "people_save", client_key, person }),
   reportShared: (client_key: string, month: string, undo = false) => agencyPost<{ ok: boolean; month: string; shared_at: string }>(ACTION_URL, { action: "report_shared", client_key, month, by: "Meredith", mode: undo ? "undo" : "" }),
   saveLead: (client_key: string, lead: Partial<Lead> & { received_at?: string; replied_at?: string }, id?: number) => agencyPost(RECORD_URL, { action: "lead_save", client_key, lead, id }),
   saveReview: (client_key: string, review: Partial<Review> & { kind?: string; contact?: string; replied?: boolean | string }, id?: number) => agencyPost(RECORD_URL, { action: "review_save", client_key, review, id }),

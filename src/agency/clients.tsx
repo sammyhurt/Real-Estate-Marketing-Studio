@@ -9,12 +9,13 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
 import { CopyButton, Field, Modal, NativeSelect, Pill, Spinner, useAction } from "./bits";
-import { api, CONTRACT_KINDS, disclosureLine, KIND_LABEL, monthLabel, PLATFORM_LABEL, PLATFORMS, type Client, type Kind, type Payment } from "./data";
+import { api, CONTRACT_KINDS, disclosureLine, KIND_LABEL, monthLabel, when, PLATFORM_LABEL, PLATFORMS, type Client, type Kind, type Payment } from "./data";
 import { PageHead, scopeClients, Section } from "./page";
 import { useStore } from "./store";
 import { Empty, Grid, Panel, Skeleton } from "./ui";
 
 export const ONBOARDING: { key: string; label: string; hint?: string }[] = [
+  { key: "portal_people", label: "The agent (and anyone helping) is on the portal people list" },
   { key: "access_instagram", label: "Meredith can post on Instagram", hint: "Added through Meta Business Suite, not a shared password" },
   { key: "access_facebook", label: "Meredith can post on the Facebook Page" },
   { key: "access_tiktok", label: "Meredith can post on TikTok" },
@@ -318,6 +319,63 @@ function Links({ c }: { c: Client }) {
   );
 }
 
+function People({ c }: { c: Client }) {
+  const { refresh } = useStore();
+  const { busy, run } = useAction();
+  const [f, setF] = useState({ email: "", name: "", role: "approver" as "approver" | "viewer" });
+  const list = (c.people || []).filter((p) => p.active);
+  const save = (person: Record<string, unknown>, ok: string) =>
+    run(
+      "p" + String(person.id || "new"),
+      async () => {
+        await api.savePerson(c.client_key, person);
+        await refresh();
+      },
+      ok,
+    );
+  return (
+    <div className="grid gap-2 text-sm">
+      <span className="font-medium">People who sign in to the portal</span>
+      {list.length ? (
+        <ul className="grid gap-1.5">
+          {list.map((p) => (
+            <li key={p.id} className="flex flex-wrap items-center gap-2">
+              <span className="min-w-0 flex-1 truncate sm:max-w-md">
+                {p.name || p.email} <span className="text-muted-foreground">{p.name ? "· " + p.email : ""}</span>
+                <span className="text-muted-foreground block text-xs">{p.last_seen_at ? "Last signed in " + when(p.last_seen_at) : "Has not signed in yet"}</span>
+              </span>
+              <NativeSelect ariaLabel={"Access for " + (p.name || p.email)} className="h-8 w-32 text-xs" value={p.role} onChange={(v) => void save({ id: p.id, role: v }, "Access changed.")} options={[{ value: "approver", label: "Can approve" }, { value: "viewer", label: "View only" }]} />
+              <Button size="sm" variant="ghost" className="rounded-full" disabled={!!busy} onClick={() => void save({ id: p.id, active: false }, "Removed. They can no longer open the portal.")}>
+                Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <span className="text-muted-foreground text-xs">Nobody yet. Add the agent's email, then invite the same email in Clerk.</span>
+      )}
+      <form
+        className="flex flex-wrap gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email.trim())) return;
+          void save({ email: f.email.trim(), name: f.name.trim(), role: f.role }, "Added. Invite " + f.email.trim() + " in Clerk so they can set up their sign-in.").then((r) => {
+            if (r !== null) setF({ email: "", name: "", role: "approver" });
+          });
+        }}
+      >
+        <Input className="h-8 w-48" type="email" placeholder="Email" aria-label="Email of the person to add" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required />
+        <Input className="h-8 w-32" placeholder="Name" aria-label="Their name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+        <NativeSelect ariaLabel="Their access" className="h-8 w-32 text-xs" value={f.role} onChange={(v) => setF({ ...f, role: v as "approver" | "viewer" })} options={[{ value: "approver", label: "Can approve" }, { value: "viewer", label: "View only" }]} />
+        <Button type="submit" size="sm" variant="outline" className="rounded-full" disabled={!!busy}>
+          Add
+        </Button>
+      </form>
+      <span className="text-muted-foreground text-xs">Only people on this list can open the portal once sign-in is on, even with the link.</span>
+    </div>
+  );
+}
+
 export function ClientsPanel() {
   const { d, pick } = useStore();
   const [edit, setEdit] = useState<{ open: boolean; c: Client | null }>({ open: false, c: null });
@@ -378,6 +436,9 @@ export function ClientsPanel() {
                       <ContractEditor key={c.client_key + c.contract.map((x) => x.kind + x.per_month).join()} c={c} />
                     </div>
                     <Links c={c} />
+                  </div>
+                  <div className="border-t pt-4">
+                    <People c={c} />
                   </div>
                 </Panel>
               );

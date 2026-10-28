@@ -12,6 +12,7 @@
     "build": "vite build --config vite.netlify.mjs"
   },
   "dependencies": {
+    "@clerk/react": "6.17.8",
     "@fontsource-variable/plus-jakarta-sans": "5.2.8",
     "@fontsource/dm-serif-display": "5.2.8",
     "@iconify-react/solar": "1.0.2",

@@ -1,12 +1,13 @@
 import CheckCircle from "@iconify-react/solar/check-circle-linear";
-import { useCallback, useEffect, useState } from "react";
+import { ClerkProvider, Show, SignIn, useAuth, useClerk } from "@clerk/react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ThemeToggle } from "@/components/utility/theme-toggle";
 
 import { CopyButton, Pill, Spinner, ToastProvider, useAction } from "@/agency/bits";
-import { day, fmt, KIND_LABEL, LEAD_STATUS_LABEL, mins, monthLabel, PLATFORM_LABEL, PORTAL_ACTION_URL, PORTAL_URL, publicPost, SOURCE_LABEL, type Funnel, type LeadSource, type LeadStatus, type Progress, type Report, type Results, type ReviewStats, type TestResult } from "@/agency/data";
+import { day, fmt, KIND_LABEL, LEAD_STATUS_LABEL, mins, monthLabel, PLATFORM_LABEL, CLERK_KEY, PORTAL_ACTION_SIGNED_URL, PORTAL_ACTION_URL, PORTAL_SIGNED_URL, PORTAL_URL, publicPost, SOURCE_LABEL, type Funnel, type LeadSource, type LeadStatus, type Progress, type Report, type Results, type ReviewStats, type TestResult } from "@/agency/data";
 import Footer from "@/agency/footer";
 import { Bar } from "@/agency/marks";
 import { ReportView } from "@/agency/report-view";
@@ -15,7 +16,7 @@ import { Wordmark } from "@/agency/wordmark";
 
 interface PortalPiece { id: number; title: string; kind: keyof typeof KIND_LABEL; platform: keyof typeof PLATFORM_LABEL; pillar: string; plan_date: string; status: "needs_approval" | "approved" | "posted"; hook: string; caption: string; script: string; compliance_ok: string; approved_by: string; approved_at: string; posted_at: string; post_url: string; version: string }
 interface PortalData {
-  ok: boolean; error?: string; agency: { name: string }; month: string; today: string; measured_through?: string;
+  ok: boolean; error?: string; no_access?: boolean; viewer?: { name: string; role: "approver" | "viewer"; email: string }; agency: { name: string }; month: string; today: string; measured_through?: string;
   client: { name: string; business: string; brokerage: string; market: string; platforms: string[]; form_url: string; renew_date: string };
   progress: Progress[]; content: PortalPiece[]; funnel: Funnel;
   leads: { id: number; created_at: string; source: LeadSource; platform: string; first_name: string; status: LeadStatus; response_min: number | null }[];
@@ -29,6 +30,22 @@ const key = () => {
   } catch {
     return "";
   }
+};
+
+/** How the portal talks to the studio: by private link only, or signed in (Clerk) with the link choosing the client. */
+interface PortalApi {
+  signedIn: boolean;
+  load: (k: string) => Promise<PortalData>;
+  act: (body: Record<string, unknown>) => Promise<unknown>;
+  signOut?: () => void;
+}
+const ApiCtx = createContext<PortalApi | null>(null);
+const useApi = () => useContext(ApiCtx)!;
+
+const linkApi: PortalApi = {
+  signedIn: false,
+  load: async (k) => (await (await fetch(PORTAL_URL + "?k=" + encodeURIComponent(k), { cache: "no-store" })).json()) as PortalData,
+  act: (body) => publicPost(PORTAL_ACTION_URL, body),
 };
 
 const NAME_KEY = "mbm-portal-name";
@@ -47,7 +64,8 @@ const keepName = (n: string) => {
   }
 };
 
-function Approve({ p, k, onDone }: { p: PortalPiece; k: string; onDone: () => void }) {
+function Approve({ p, k, onDone, viewOnly }: { p: PortalPiece; k: string; onDone: () => void; viewOnly?: boolean }) {
+  const api = useApi();
   const { busy, run } = useAction();
   const [ask, setAsk] = useState(false);
   const [note, setNote] = useState("");
@@ -59,7 +77,7 @@ function Approve({ p, k, onDone }: { p: PortalPiece; k: string; onDone: () => vo
         keepName(name.trim());
         try {
           // version: the approval is for exactly the words on screen; if Meredith edited since, it is refused
-          await publicPost(PORTAL_ACTION_URL, { k, id: p.id, action, note, version: p.version, name: name.trim().slice(0, 40) });
+          await api.act({ k, id: p.id, action, note, version: p.version, ...(api.signedIn ? {} : { name: name.trim().slice(0, 40) }) });
         } catch (e) {
           if (e instanceof Error && /changed since/i.test(e.message)) onDone();
           throw e;
@@ -68,6 +86,7 @@ function Approve({ p, k, onDone }: { p: PortalPiece; k: string; onDone: () => vo
       },
       action === "approve" ? "Approved. Meredith will post it." : "Sent to Meredith.",
     );
+  if (viewOnly) return <p className="text-muted-foreground text-sm">You can view this piece. Approvals come from the person Meredith set as approver.</p>;
   return (
     <div className="grid gap-2">
       {ask ? (
@@ -84,7 +103,7 @@ function Approve({ p, k, onDone }: { p: PortalPiece; k: string; onDone: () => vo
         </>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <input aria-label="Your name (optional)" placeholder="Your name (optional)" value={name} onChange={(e) => setName(e.target.value)} className="border-input bg-background h-8 w-44 rounded-md border px-2 text-sm" />
+          {api.signedIn ? null : <input aria-label="Your name (optional)" placeholder="Your name (optional)" value={name} onChange={(e) => setName(e.target.value)} className="border-input bg-background h-8 w-44 rounded-md border px-2 text-sm" />}
           <Button size="sm" className="rounded-full" disabled={!!busy} onClick={() => void send("approve")}>
             {busy ? <Spinner /> : <CheckCircle className="size-4" />} Approve
           </Button>
@@ -98,26 +117,28 @@ function Approve({ p, k, onDone }: { p: PortalPiece; k: string; onDone: () => vo
 }
 
 function PortalApp() {
+  const api = useApi();
   const k = key();
   const [d, setD] = useState<PortalData | null>(null);
   const [err, setErr] = useState("");
+  const [noAccess, setNoAccess] = useState(false);
   const load = useCallback(async () => {
     if (k.length !== 24) {
       setErr("This link is not complete. Ask Meredith to send it again.");
       return;
     }
     try {
-      const r = await fetch(PORTAL_URL + "?k=" + encodeURIComponent(k), { cache: "no-store" });
-      const j = (await r.json()) as PortalData;
+      const j = await api.load(k);
+      setNoAccess(!!j.no_access);
       if (!j.ok) setErr(j.error || "This link is off or out of date. Ask Meredith for a new one.");
       else {
         setD(j);
         setErr("");
       }
-    } catch {
-      setErr("Could not load your page. Check your connection and refresh.");
+    } catch (e) {
+      setErr(e instanceof Error && e.message.startsWith("Your sign-in") ? e.message : "Could not load your page. Check your connection and refresh.");
     }
-  }, [k]);
+  }, [k, api]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -130,12 +151,25 @@ function PortalApp() {
     <div className="flex min-h-screen flex-col">
       <header className="container flex items-center justify-between py-6">
         <Wordmark label="Client portal" />
-        <ThemeToggle />
+        <div className="flex items-center gap-2">
+          {api.signedIn && d?.viewer ? <span className="text-muted-foreground hidden text-sm sm:inline">Signed in as {d.viewer.name}</span> : null}
+          {api.signedIn ? (
+            <Button size="sm" variant="ghost" className="rounded-full" onClick={() => api.signOut?.()}>
+              Sign out
+            </Button>
+          ) : null}
+          <ThemeToggle />
+        </div>
       </header>
       <main className="container flex-1 pb-20">
         {err ? (
           <div className="mx-auto max-w-md py-24 text-center">
             <p className="text-lg font-semibold">{err}</p>
+            {noAccess && api.signOut ? (
+              <Button variant="outline" className="mt-4 rounded-full" onClick={() => api.signOut?.()}>
+                Sign in with a different email
+              </Button>
+            ) : null}
           </div>
         ) : !d ? (
           <Skeleton className="h-96" />
@@ -165,7 +199,7 @@ function PortalApp() {
                         </details>
                       ) : null}
                       {p.compliance_ok === "yes" ? <p className="text-muted-foreground text-xs">Meredith ran the license-details and Fair Housing checklist on these exact words. Approving records your OK for this version only.</p> : null}
-                      <Approve p={p} k={k} onDone={() => void load()} />
+                      <Approve p={p} k={k} onDone={() => void load()} viewOnly={d.viewer?.role === "viewer"} />
                     </Panel>
                   ))}
                 </div>
@@ -298,15 +332,87 @@ function PortalApp() {
           </div>
         )}
       </main>
-      <Footer note={"Prepared by " + (d?.agency.name || "Meredith Brice Marketing") + ". This page is private to you; please don't share the link."} />
+      <Footer note={"Prepared by " + (d?.agency.name || "Meredith Brice Marketing") + (api.signedIn ? ". Only people Meredith added can open this page." : ". This page is private to you; please don't share the link.")} />
+    </div>
+  );
+}
+
+/** Signed-in calls: the Clerk session token goes in the Authorization header; n8n checks its signature. */
+function SignedInPortal() {
+  const { getToken } = useAuth();
+  const clerk = useClerk();
+  const api = useMemo<PortalApi>(() => {
+    const call = async (url: string, body: Record<string, unknown>) => {
+      const token = await getToken();
+      if (!token) throw new Error("Your sign-in expired. Sign in again.");
+      let r: Response;
+      try {
+        r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token }, body: JSON.stringify(body), cache: "no-store" });
+      } catch {
+        throw new Error("Could not reach the studio. Check your connection and try again.");
+      }
+      if (r.status === 401 || r.status === 403) throw new Error("Your sign-in was not accepted. Sign out and sign in again.");
+      return (await r.json()) as PortalData & { ok?: boolean; error?: string };
+    };
+    return {
+      signedIn: true,
+      load: (k) => call(PORTAL_SIGNED_URL, { k }),
+      act: async (body) => {
+        const j = await call(PORTAL_ACTION_SIGNED_URL, body);
+        if (j.ok === false) throw new Error(j.error || "Something went wrong. Please try again.");
+        return j;
+      },
+      signOut: () => void clerk.signOut({ redirectUrl: location.href }),
+    };
+  }, [getToken, clerk]);
+  return (
+    <ApiCtx.Provider value={api}>
+      <PortalApp />
+    </ApiCtx.Provider>
+  );
+}
+
+function SignInPage() {
+  const here = location.pathname + location.search;
+  return (
+    <div className="flex min-h-screen flex-col">
+      <header className="container flex items-center justify-between py-6">
+        <Wordmark label="Client portal" />
+        <ThemeToggle />
+      </header>
+      <main className="container grid flex-1 place-items-center gap-6 pb-20">
+        <div className="grid justify-items-center gap-5">
+          <div className="max-w-md text-center">
+            <h1 className="text-3xl font-semibold tracking-tight">Sign in to see your marketing</h1>
+            <p className="text-muted-foreground mt-2 text-sm">Use the email Meredith invited. Your plan, approvals and reports are only shown to people she added.</p>
+          </div>
+          <SignIn routing="hash" fallbackRedirectUrl={here} />
+        </div>
+      </main>
+      <Footer note="Private client portal. Nothing here is posted or sent on its own." />
     </div>
   );
 }
 
 export default function Portal() {
+  if (!CLERK_KEY)
+    return (
+      <ToastProvider>
+        <ApiCtx.Provider value={linkApi}>
+          <PortalApp />
+        </ApiCtx.Provider>
+      </ToastProvider>
+    );
   return (
-    <ToastProvider>
-      <PortalApp />
-    </ToastProvider>
+    <ClerkProvider publishableKey={CLERK_KEY} appearance={{ variables: { colorPrimary: "#2f4156", borderRadius: "8px", fontFamily: "inherit" } }}>
+      <ToastProvider>
+        <Show when="signed-out">
+          <SignInPage />
+        </Show>
+        <Show when="signed-in">
+          <SignedInPortal />
+        </Show>
+      </ToastProvider>
+    </ClerkProvider>
   );
 }
