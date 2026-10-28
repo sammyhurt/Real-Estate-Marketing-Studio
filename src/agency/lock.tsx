@@ -26,7 +26,7 @@ export default function LockScreen({ onUnlock, error, checking }: { onUnlock: (p
         >
           <div aria-hidden className="from-chart-1/30 via-chart-2/15 pointer-events-none absolute top-0 right-0 left-0 h-px bg-gradient-to-r to-transparent" />
           <div className="grid gap-6">
-            <p className="text-muted-foreground text-sm">Enter the agency studio passcode. For now it is the same one as your TikTok Studio.</p>
+            <p className="text-muted-foreground text-sm">Enter the agency studio passcode. It is its own passcode, separate from the TikTok Studio.</p>
             <div className="grid gap-1.5">
               <Label htmlFor="pass">Passcode</Label>
               <Input id="pass" type="password" autoComplete="current-password" required placeholder="***********" className="bg-input" value={pass} onChange={(e) => setPass(e.target.value)} aria-invalid={error ? true : undefined} />
