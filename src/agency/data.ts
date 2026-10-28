@@ -62,7 +62,7 @@ export interface Report { id: number; month: string; created_at: string; shared_
 export interface ContractItem { id: number; kind: Kind; label: string; per_month: number; note: string }
 export interface Health { level: "warn" | "info"; text: string }
 export interface Onboarding { [key: string]: boolean | string }
-export interface PortalPerson { id: number; email: string; name: string; role: "approver" | "viewer"; active: boolean; invited_at: string; last_seen_at: string }
+export interface PortalPerson { id: number; email: string; name: string; role: "approver" | "viewer"; active: boolean; invited_at: string; last_seen_at: string; invite_status?: "" | "invited" | "has_account" | "invite_failed" | "needs_link" | "revoked"; invite_note?: string }
 export interface Payment { month: string; amount: number; received: string }
 export interface Client {
   id: number; client_key: string; name: string; business: string; license_name: string; license_title: string; brokerage: string; team_name: string; market: string;
@@ -137,7 +137,7 @@ export const api = {
   saveContent: (client_key: string, content: Partial<Piece>, id?: number) => agencyPost(ACTION_URL, { action: "content_save", client_key, content, id }),
   setStatus: (id: number, status: ContentStatus, extra: { by?: string; post_url?: string; facts_checked?: boolean } = {}) => agencyPost(ACTION_URL, { action: "content_status", id, status, ...extra }),
   portalKey: (client_key: string, mode: "new" | "off") => agencyPost(ACTION_URL, { action: "portal_key", client_key, mode }),
-  savePerson: (client_key: string, person: Partial<PortalPerson>) => agencyPost(ACTION_URL, { action: "people_save", client_key, person }),
+  savePerson: (client_key: string, person: Partial<PortalPerson> & { resend?: boolean }) => agencyPost<{ ok: boolean; id: number; invite_status?: string; invite_note?: string }>(ACTION_URL, { action: "people_save", client_key, person }),
   reportShared: (client_key: string, month: string, undo = false) => agencyPost<{ ok: boolean; month: string; shared_at: string }>(ACTION_URL, { action: "report_shared", client_key, month, by: "Meredith", mode: undo ? "undo" : "" }),
   saveLead: (client_key: string, lead: Partial<Lead> & { received_at?: string; replied_at?: string }, id?: number) => agencyPost(RECORD_URL, { action: "lead_save", client_key, lead, id }),
   saveReview: (client_key: string, review: Partial<Review> & { kind?: string; contact?: string; replied?: boolean | string }, id?: number) => agencyPost(RECORD_URL, { action: "review_save", client_key, review, id }),

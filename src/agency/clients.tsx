@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
-import { CopyButton, Field, Modal, NativeSelect, Pill, Spinner, useAction } from "./bits";
+import { CopyButton, Field, Modal, NativeSelect, Pill, Spinner, useAction, useToast } from "./bits";
 import { api, CONTRACT_KINDS, disclosureLine, KIND_LABEL, monthLabel, when, PLATFORM_LABEL, PLATFORMS, type Client, type Kind, type Payment } from "./data";
 import { PageHead, scopeClients, Section } from "./page";
 import { useStore } from "./store";
@@ -319,20 +319,25 @@ function Links({ c }: { c: Client }) {
   );
 }
 
+const INVITE_LABEL: Record<string, string> = { invited: "Invitation emailed, waiting for them to set up their sign-in", has_account: "Has a sign-in", invite_failed: "Invitation did not go out", needs_link: "No invitation yet: make a portal link first", revoked: "Invitation cancelled" };
+
 function People({ c }: { c: Client }) {
   const { refresh } = useStore();
   const { busy, run } = useAction();
+  const toast = useToast();
   const [f, setF] = useState({ email: "", name: "", role: "approver" as "approver" | "viewer" });
   const list = (c.people || []).filter((p) => p.active);
   const save = (person: Record<string, unknown>, ok: string) =>
-    run(
-      "p" + String(person.id || "new"),
-      async () => {
-        await api.savePerson(c.client_key, person);
-        await refresh();
-      },
-      ok,
-    );
+    run("p" + String(person.id || "new"), async () => {
+      const r = await api.savePerson(c.client_key, person);
+      await refresh();
+      // say what actually happened with the Clerk invitation, not what we hoped
+      if (r.invite_status === "invite_failed" || r.invite_status === "needs_link") toast(r.invite_note || "Saved, but no invitation went out.", "err");
+      else if (r.invite_status === "invited") toast(person.resend ? "Invitation sent again." : ok + " Invitation emailed.");
+      else if (r.invite_status === "has_account") toast(ok + " They already have a sign-in.");
+      else toast(ok);
+      return r;
+    });
   return (
     <div className="grid gap-2 text-sm">
       <span className="font-medium">People who sign in to the portal</span>
@@ -342,8 +347,16 @@ function People({ c }: { c: Client }) {
             <li key={p.id} className="flex flex-wrap items-center gap-2">
               <span className="min-w-0 flex-1 truncate sm:max-w-md">
                 {p.name || p.email} <span className="text-muted-foreground">{p.name ? "· " + p.email : ""}</span>
-                <span className="text-muted-foreground block text-xs">{p.last_seen_at ? "Last signed in " + when(p.last_seen_at) : "Has not signed in yet"}</span>
+                <span className={"block text-xs " + (p.invite_status === "invite_failed" || p.invite_status === "needs_link" ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
+                  {p.last_seen_at ? "Last signed in " + when(p.last_seen_at) : (p.invite_status && INVITE_LABEL[p.invite_status]) || "Has not signed in yet"}
+                  {!p.last_seen_at && (p.invite_status === "invite_failed" || p.invite_status === "needs_link") && p.invite_note ? ". " + p.invite_note : ""}
+                </span>
               </span>
+              {!p.last_seen_at && p.invite_status !== "has_account" ? (
+                <Button size="sm" variant="ghost" className="rounded-full" disabled={!!busy} onClick={() => void save({ id: p.id, resend: true }, "Invitation sent again.")}>
+                  Resend invite
+                </Button>
+              ) : null}
               <NativeSelect ariaLabel={"Access for " + (p.name || p.email)} className="h-8 w-32 text-xs" value={p.role} onChange={(v) => void save({ id: p.id, role: v }, "Access changed.")} options={[{ value: "approver", label: "Can approve" }, { value: "viewer", label: "View only" }]} />
               <Button size="sm" variant="ghost" className="rounded-full" disabled={!!busy} onClick={() => void save({ id: p.id, active: false }, "Removed. They can no longer open the portal.")}>
                 Remove
@@ -352,14 +365,14 @@ function People({ c }: { c: Client }) {
           ))}
         </ul>
       ) : (
-        <span className="text-muted-foreground text-xs">Nobody yet. Add the agent's email, then invite the same email in Clerk.</span>
+        <span className="text-muted-foreground text-xs">Nobody yet. Add the agent's email: they get an invitation to set up their sign-in.</span>
       )}
       <form
         className="flex flex-wrap gap-2"
         onSubmit={(e) => {
           e.preventDefault();
           if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email.trim())) return;
-          void save({ email: f.email.trim(), name: f.name.trim(), role: f.role }, "Added. Invite " + f.email.trim() + " in Clerk so they can set up their sign-in.").then((r) => {
+          void save({ email: f.email.trim(), name: f.name.trim(), role: f.role }, "Added " + f.email.trim() + ".").then((r) => {
             if (r !== null) setF({ email: "", name: "", role: "approver" });
           });
         }}
@@ -371,7 +384,7 @@ function People({ c }: { c: Client }) {
           Add
         </Button>
       </form>
-      <span className="text-muted-foreground text-xs">Only people on this list can open the portal once sign-in is on, even with the link.</span>
+      <span className="text-muted-foreground text-xs">Adding someone emails them an invitation to set up their sign-in. Only people on this list can open the portal, even with the link. Removing someone shuts them out right away.</span>
     </div>
   );
 }

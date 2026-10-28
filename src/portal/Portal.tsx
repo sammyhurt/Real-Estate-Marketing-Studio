@@ -1,5 +1,5 @@
 import CheckCircle from "@iconify-react/solar/check-circle-linear";
-import { ClerkProvider, Show, SignIn, useAuth, useClerk } from "@clerk/react";
+import { ClerkProvider, Show, SignIn, SignUp, useAuth, useClerk } from "@clerk/react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -373,7 +373,11 @@ function SignedInPortal() {
 }
 
 function SignInPage() {
-  const here = location.pathname + location.search;
+  // an invitation link arrives with a Clerk ticket: show sign-up so they can set their password, code or passkey
+  const qs = new URLSearchParams(location.search);
+  const invited = qs.has("__clerk_ticket");
+  const k = qs.get("k") || "";
+  const here = location.pathname + (k ? "?k=" + encodeURIComponent(k) : "");
   return (
     <div className="flex min-h-screen flex-col">
       <header className="container flex items-center justify-between py-6">
@@ -383,10 +387,10 @@ function SignInPage() {
       <main className="container grid flex-1 place-items-center gap-6 pb-20">
         <div className="grid justify-items-center gap-5">
           <div className="max-w-md text-center">
-            <h1 className="text-3xl font-semibold tracking-tight">Sign in to see your marketing</h1>
-            <p className="text-muted-foreground mt-2 text-sm">Use the email Meredith invited. Your plan, approvals and reports are only shown to people she added.</p>
+            <h1 className="text-3xl font-semibold tracking-tight">{invited ? "Set up your sign-in" : "Sign in to see your marketing"}</h1>
+            <p className="text-muted-foreground mt-2 text-sm">{invited ? "Meredith invited you to your marketing portal. Choose a password, then add an authenticator code or a passkey to keep it safe." : "Use the email Meredith invited. Your plan, approvals and reports are only shown to people she added."}</p>
           </div>
-          <SignIn routing="hash" fallbackRedirectUrl={here} />
+          {invited ? <SignUp routing="hash" fallbackRedirectUrl={here} signInUrl={here} /> : <SignIn routing="hash" fallbackRedirectUrl={here} />}
         </div>
       </main>
       <Footer note="Private client portal. Nothing here is posted or sent on its own." />
