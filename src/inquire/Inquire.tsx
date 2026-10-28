@@ -9,7 +9,7 @@ import { ThemeToggle } from "@/components/utility/theme-toggle";
 
 import { FORM_INFO_URL, FORM_URL, publicPost } from "@/agency/data";
 
-interface Info { ok: boolean; error?: string; name: string; business: string; market: string; disclosure: string }
+interface Info { ok: boolean; error?: string; name: string; business: string; market: string; disclosure: string; sop_url?: string; fair_housing_url?: string }
 
 const params = () => {
   try {
@@ -129,6 +129,20 @@ export default function Inquire() {
               </Button>
               <p className="text-muted-foreground text-xs">Your details go only to {info.name} and their marketing assistant, to reply to you. No mailing lists.</p>
               {info.disclosure ? <p className="text-muted-foreground border-t pt-3 text-xs">{info.disclosure}</p> : null}
+              {info.sop_url || info.fair_housing_url ? (
+                <p className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                  {info.sop_url ? (
+                    <a href={info.sop_url} target="_blank" rel="noopener noreferrer" className="underline">
+                      Standard Operating Procedures
+                    </a>
+                  ) : null}
+                  {info.fair_housing_url ? (
+                    <a href={info.fair_housing_url} target="_blank" rel="noopener noreferrer" className="underline">
+                      New York State Fair Housing Notice
+                    </a>
+                  ) : null}
+                </p>
+              ) : null}
             </form>
           )}
         </div>

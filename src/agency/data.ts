@@ -20,44 +20,50 @@ export type LeadStatus = "new" | "contacted" | "appointment" | "client" | "close
 export type LeadSource = "comment" | "dm" | "form" | "call" | "text" | "email" | "referral" | "open_house" | "other";
 export type Metric = "sends_per_1k" | "saves_per_1k" | "likes_per_1k" | "comments_per_1k" | "views" | "link_taps";
 
-export interface Check { rule: string; ok: boolean; fix: string; source: "rule" | "ai" }
+export interface Check { rule: string; ok: boolean; fix: string; source: "rule" | "ai" | "permission" }
 export interface Compliance { checked_at: string; ok: boolean; checks: Check[]; disclosure_line: string; answers: Record<string, unknown> }
 export interface Piece {
   id: number; title: string; kind: Kind; platform: Platform; pillar: string; plan_date: string; status: ContentStatus;
   hook: string; caption: string; script: string; notes: string; search_phrase: string;
   compliance: Compliance | null; compliance_ok: "" | "yes" | "no"; approved_by: string; approved_at: string;
   posted_by: string; posted_at: string; post_url: string; test_id: number; source: string; updated_at: string;
+  hook_type: string; length_s: number | null; platform_post_id: string; post_check: string; ai_draft: { title: string; hook: string; caption: string; script: string } | null;
 }
 export interface Progress { kind: Kind; label: string; promised: number; delivered: number; lined_up: number; expected_by_now: number; behind: boolean }
-export interface Lead { id: number; created_at: string; source: LeadSource; platform: string; name: string; contact: string; message: string; post_url: string; status: LeadStatus; first_reply_at: string; response_min: number | null; heard_about: string; value: number; notes: string }
-export interface Funnel { inquiries: number; contacted: number; appointments: number; clients: number; closed: number; lost: number; this_month: number; waiting: number; median_response_min: number | null; by_source: { source: string; n: number }[] }
+export interface Lead { id: number; created_at: string; logged_at: string; received_how: "form" | "entered" | "logged"; possible_duplicate_of: number; source: LeadSource; platform: string; name: string; contact: string; message: string; post_url: string; status: LeadStatus; first_reply_at: string; response_min: number | null; heard_about: string; value: number; notes: string }
+export interface Funnel { inquiries: number; contacted: number; appointments: number; clients: number; closed: number; lost: number; this_month: number; waiting: number; oldest_waiting_min: number | null; from_logging: number; median_response_min: number | null; by_source: { source: string; n: number }[] }
 export interface Review { id: number; date: string; rating: number; reviewer: string; text: string; replied: boolean; reply_draft: string; platform: string }
 export interface ReviewStats { count: number; avg: number | null; last_date: string; days_since: number | null; last_90d: number; unreplied: number; requests_month: number }
-export interface Signals { sends_per_1k: number; saves_per_1k: number; likes_per_1k: number; comments_per_1k: number }
-export interface Read { views: number; reach: number; likes?: number; comments?: number; shares: number; saves: number; watch_avg_s?: number; link_taps?: number; profile_visits?: number; age_h: number; signals?: Signals | null }
-export interface PostResult { content_id: number; title: string; kind: string; pillar: string; platform: string; post_url: string; posted_at: string; d24: Read | null; d7: Read | null; d30: Read | null; vs_normal: number | null }
-export interface Results { posts: PostResult[]; normal: { n: number; views_7d: number | null; sends_per_1k: number | null; saves_per_1k: number | null }; month: { posts: number; views: number; link_taps: number } }
-export interface TestResult { read_at: string; window: string; metric: Metric; a: number; b: number; prob_b_better: number | null; verdict: string; a_reach: number; b_reach: number }
-export interface Test { id: number; title: string; variable: string; variant_a: string; variant_b: string; metric: Metric; read_h: number; content_a: number; content_b: number; status: "planned" | "running" | "read" | "dropped"; result: TestResult | null; created_at: string }
+/** sends_per_1k is the stored key; it is computed from the Shares count and always shown as "shares". */
+export interface Signals { sends_per_1k: number | null; saves_per_1k: number | null; likes_per_1k: number | null; comments_per_1k: number | null }
+/** null = not entered (never zero). */
+export interface Read { views: number | null; reach: number | null; likes?: number | null; comments?: number | null; shares: number | null; saves: number | null; watch_avg_s?: number | null; link_taps?: number | null; profile_visits?: number | null; age_h: number; signals?: Signals | null }
+export interface PostResult { content_id: number; title: string; kind: string; pillar: string; platform: string; post_url: string; posted_at: string; d24: Read | null; d7: Read | null; d30: Read | null; other?: { age_h: number; views: number | null; read_at: string }[]; vs_normal: number | null }
+export interface Pending { awaiting_7d: { id: number; title: string; posted_at: string; due: string }[]; missed_7d: { id: number; title: string; posted_at: string }[]; awaiting_30d: number }
+export interface Results { posts: PostResult[]; normal: { n: number; views_7d: number | null; sends_per_1k: number | null; saves_per_1k: number | null }; pending?: Pending; month: { posts: number; views: number; link_taps: number } }
+export interface TestResult { read_at: string; window: string; metric: Metric; a: number; b: number; pairs?: number; wins?: number; losses?: number; prob_b_better: number | null; verdict: string; a_reach: number; b_reach: number }
+export interface Test { id: number; title: string; variable: string; variant_a: string; variant_b: string; metric: Metric; read_h: number; content_a: number; content_b: number; status: "planned" | "running" | "read" | "dropped"; result: TestResult | null; hypothesis: string; created_at: string }
 export interface ReportSummary { headline: string; what_worked: string[]; what_to_change: string[]; next_month: string[]; note: string }
 export interface ReportBody {
   numbers: {
-    month: string; posts_published: number; delivered: { kind: string; promised: number; delivered: number }[];
-    results: { measured_posts: number; posts: { title: string; kind: string; views_7d: number; reach_7d: number; sends_per_1k: number; saves_per_1k: number; link_taps: number; vs_normal: number | null }[]; normal_views_7d: number | null; normal_based_on: number };
-    leads: { inquiries: number; contacted: number; appointments: number; clients: number; closed: number; median_response_min: number | null; from_a_post?: number; by_source: Record<string, number> };
+    month: string; measured_through?: string; posts_published: number; delivered: { kind: string; promised: number; delivered: number }[];
+    results: { measured_posts: number; posts: { title: string; kind: string; views_7d: number | null; reach_7d: number | null; shares_per_1k?: number | null; sends_per_1k?: number | null; saves_per_1k: number | null; link_taps: number | null; age_days?: number; vs_normal: number | null }[]; pending?: { title: string; posted: string; status: string }[]; normal_views_7d: number | null; normal_based_on: number };
+    leads: { inquiries: number; contacted: number; appointments: number; clients: number; closed: number; median_response_min: number | null; from_a_post?: number; waiting_now?: number; reply_time_from_logging?: number; by_source: Record<string, number> };
     reviews: { new_this_month: number; total: number; avg: number | null; requests_sent: number };
     tests: { title: string; variable: string; verdict: string }[];
   };
   summary: ReportSummary; generated_at: string;
 }
-export interface Report { id: number; month: string; created_at: string; body: ReportBody | null }
+export interface Report { id: number; month: string; created_at: string; shared_at: string; shared_by: string; body: ReportBody | null }
 export interface ContractItem { id: number; kind: Kind; label: string; per_month: number; note: string }
 export interface Health { level: "warn" | "info"; text: string }
 export interface Onboarding { [key: string]: boolean | string }
+export interface Payment { month: string; amount: number; received: string }
 export interface Client {
   id: number; client_key: string; name: string; business: string; license_name: string; license_title: string; brokerage: string; team_name: string; market: string;
   platforms: string[]; handles: Record<string, string>; alert_email: string; alert_leads: boolean; status: "active" | "paused" | "ended" | "removed";
   start_date: string; renew_date: string; renew_in_days: number | null; fee: number; voice: string; approved_claims: string; disclosures: string; onboarding: Onboarding; notes: string;
+  broker_contact: string; sop_url: string; fair_housing_url: string; payments: Payment[];
   portal_url: string; form_url: string; contract: ContractItem[]; progress: Progress[]; content: Piece[]; leads: Lead[]; funnel: Funnel;
   reviews: { stats: ReviewStats; list: Review[]; requests: { id: number; contact: string; date: string; reviewer: string }[] };
   results: Results; tests: Test[]; reports: Report[]; health: Health[];
@@ -70,7 +76,7 @@ export const PLATFORM_LABEL: Record<Platform, string> = { instagram: "Instagram"
 export const STATUS_LABEL: Record<ContentStatus, string> = { idea: "Idea", draft: "Draft", needs_approval: "Waiting on client", approved: "Approved", posted: "Posted", dropped: "Dropped" };
 export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = { new: "New, no reply yet", contacted: "Contacted", appointment: "Appointment set", client: "Became a client", closed: "Closed a deal", lost: "Not moving forward" };
 export const SOURCE_LABEL: Record<LeadSource, string> = { comment: "Comment", dm: "DM", form: "Inquiry form", call: "Call", text: "Text", email: "Email", referral: "Referral", open_house: "Open house", other: "Other" };
-export const METRIC_LABEL: Record<Metric, string> = { sends_per_1k: "Sends per 1,000 reached", saves_per_1k: "Saves per 1,000 reached", likes_per_1k: "Likes per 1,000 reached", comments_per_1k: "Comments per 1,000 reached", views: "Views", link_taps: "Link taps" };
+export const METRIC_LABEL: Record<Metric, string> = { sends_per_1k: "Shares per 1,000 reached", saves_per_1k: "Saves per 1,000 reached", likes_per_1k: "Likes per 1,000 reached", comments_per_1k: "Comments per 1,000 reached", views: "Views", link_taps: "Link taps" };
 export const PLATFORMS: Platform[] = ["instagram", "facebook", "tiktok", "gbp", "youtube", "other"];
 export const CONTRACT_KINDS: Kind[] = ["reel", "carousel", "post", "story", "gbp_post", "referral", "email", "listing", "report"];
 
@@ -124,14 +130,15 @@ export const api = {
   saveClient: (client: Partial<Client> & Record<string, unknown>, client_key?: string) => agencyPost(ACTION_URL, { action: "client_save", client, client_key }),
   saveContract: (client_key: string, items: { kind: Kind; per_month: number; note?: string }[]) => agencyPost(ACTION_URL, { action: "contract_save", client_key, items }),
   saveContent: (client_key: string, content: Partial<Piece>, id?: number) => agencyPost(ACTION_URL, { action: "content_save", client_key, content, id }),
-  setStatus: (id: number, status: ContentStatus, extra: { by?: string; post_url?: string } = {}) => agencyPost(ACTION_URL, { action: "content_status", id, status, ...extra }),
+  setStatus: (id: number, status: ContentStatus, extra: { by?: string; post_url?: string; facts_checked?: boolean } = {}) => agencyPost(ACTION_URL, { action: "content_status", id, status, ...extra }),
   portalKey: (client_key: string, mode: "new" | "off") => agencyPost(ACTION_URL, { action: "portal_key", client_key, mode }),
-  saveLead: (client_key: string, lead: Partial<Lead>, id?: number) => agencyPost(RECORD_URL, { action: "lead_save", client_key, lead, id }),
+  reportShared: (client_key: string, month: string, undo = false) => agencyPost<{ ok: boolean; month: string; shared_at: string }>(ACTION_URL, { action: "report_shared", client_key, month, by: "Meredith", mode: undo ? "undo" : "" }),
+  saveLead: (client_key: string, lead: Partial<Lead> & { received_at?: string; replied_at?: string }, id?: number) => agencyPost(RECORD_URL, { action: "lead_save", client_key, lead, id }),
   saveReview: (client_key: string, review: Partial<Review> & { kind?: string; contact?: string; replied?: boolean | string }, id?: number) => agencyPost(RECORD_URL, { action: "review_save", client_key, review, id }),
   saveResult: (client_key: string, result: Record<string, unknown>) => agencyPost(RECORD_URL, { action: "result_save", client_key, result }),
   saveTest: (client_key: string, test: Partial<Test>, id?: number) => agencyPost(RECORD_URL, { action: "test_save", client_key, test, id }),
   compliance: (id: number, answers: Record<string, unknown>) => agencyPost<{ ok: boolean; id: number; compliance: Compliance }>(AI_URL, { action: "compliance", id, answers }),
-  draft: (client_key: string, month: string, kind: "plan" | "referral") => agencyPost<{ ok: boolean; made: number }>(AI_URL, { action: "draft_content", client_key, month, kind }),
+  draft: (client_key: string, month: string, kind: "plan" | "referral", confirm = false) => agencyPost<{ ok: boolean; made: number }>(AI_URL, { action: "draft_content", client_key, month, kind, confirm }),
   reviewReply: (id: number) => agencyPost<{ ok: boolean; id: number; reply: string }>(AI_URL, { action: "review_reply", id }),
   readTest: (id: number) => agencyPost<{ ok: boolean; id: number; result: TestResult }>(AI_URL, { action: "test_read", id }),
   report: (client_key: string, month: string) => agencyPost<{ ok: boolean; id: number; month: string; body: ReportBody }>(AI_URL, { action: "report_make", client_key, month }),
@@ -215,5 +222,7 @@ export const addMonths = (ym: string, n: number) => {
   const d = new Date(Date.UTC(y, m - 1 + n, 15));
   return d.toISOString().slice(0, 7);
 };
-export const disclosureLine = (c: Pick<Client, "disclosures" | "license_name" | "license_title" | "brokerage">) =>
-  c.disclosures || [c.license_name, c.license_title].filter(Boolean).join(", ") + (c.brokerage ? " | " + c.brokerage : "");
+export const disclosureLine = (c: Pick<Client, "disclosures" | "license_name" | "license_title" | "brokerage"> & { broker_contact?: string }) =>
+  c.disclosures || [[c.license_name, c.license_title].filter(Boolean).join(", "), c.brokerage, c.broker_contact].filter(Boolean).join(" | ");
+/** A number that may be blank: blank shows a dash, never zero. */
+export const val = (n: number | null | undefined) => (n == null ? "—" : String(n));

@@ -11,7 +11,8 @@ import { NeedClient, PageHead, Section } from "./page";
 import { useStore } from "./store";
 import { Empty, Grid, Panel, Stat } from "./ui";
 
-const windowFor = (h: number) => (h >= 18 && h <= 36 ? "24-hour" : h >= 134 && h <= 218 ? "7-day" : h >= 26 * 24 && h <= 35 * 24 ? "30-day" : "");
+// same windows as the studio uses when saving: 20-30 h, 6-8 days, 28-33 days
+const windowFor = (h: number) => (h >= 20 && h <= 30 ? "24-hour" : h >= 144 && h <= 192 ? "7-day" : h >= 28 * 24 && h <= 33 * 24 ? "30-day" : "");
 const localNow = () => {
   const d = new Date();
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -28,7 +29,7 @@ function CheckIn({ c, onClose, startId }: { c: Client; onClose: () => void; star
   const p = posted.find((x) => String(x.id) === id);
   const age = p ? (Date.parse(new Date(at).toISOString()) - Date.parse(p.posted_at)) / 36e5 : 0;
   const win = windowFor(age);
-  const F: [string, string][] = [["views", "Views / plays"], ["reach", "Accounts reached"], ["likes", "Likes"], ["comments", "Comments"], ["shares", "Shares / sends"], ["saves", "Saves"], ["watch_avg_s", "Average watch (sec)"], ["profile_visits", "Profile visits"], ["link_taps", "Link taps"], ["follows", "Follows"]];
+  const F: [string, string][] = [["views", "Views / plays"], ["reach", "Accounts reached"], ["likes", "Likes"], ["comments", "Comments"], ["shares", "Shares"], ["saves", "Saves"], ["watch_avg_s", "Average watch (sec)"], ["profile_visits", "Profile visits"], ["link_taps", "Link taps"], ["follows", "Follows"]];
   return (
     <Modal open onClose={onClose} title="Add a results check-in" wide>
       {!posted.length ? (
@@ -42,6 +43,8 @@ function CheckIn({ c, onClose, startId }: { c: Client; onClose: () => void; star
               "save",
               async () => {
                 if (!p) throw new Error("Pick the post.");
+                if (Date.parse(new Date(at).toISOString()) > Date.now() + 6e5) throw new Error("The reading time can't be in the future.");
+                if (age < 0) throw new Error("The reading time is before the post went up.");
                 await api.saveResult(c.client_key, { content_id: p.id, read_at: new Date(at).toISOString(), ...Object.fromEntries(Object.entries(v).map(([k, x]) => [k, x])) });
                 await refresh();
                 onClose();
@@ -58,7 +61,7 @@ function CheckIn({ c, onClose, startId }: { c: Client; onClose: () => void; star
               <Input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} />
             </Field>
           </div>
-          <p className="text-muted-foreground text-sm">Copy these from the platform's insights for this one post. Every post is read at the same ages so they can be compared fairly.</p>
+          <p className="text-muted-foreground text-sm">Copy these from the platform's insights for this one post. Leave a box empty if the platform doesn't show that number: empty stays “not available”, it never counts as zero. Type 0 only for a real zero.</p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             {F.map(([k, label]) => (
               <Field key={k} label={label}>
@@ -81,7 +84,7 @@ function TestEditor({ c, onClose }: { c: Client; onClose: () => void }) {
   const { refresh } = useStore();
   const { busy, run } = useAction();
   const pieces = c.content.filter((x) => x.status !== "dropped");
-  const [f, setF] = useState({ title: "", variable: "hook", variant_a: "", variant_b: "", metric: "sends_per_1k" as Metric, read_h: "168", content_a: "", content_b: "" });
+  const [f, setF] = useState({ title: "", hypothesis: "", variable: "hook", variant_a: "", variant_b: "", metric: "sends_per_1k" as Metric, read_h: "168", content_a: "", content_b: "" });
   const opts = [{ value: "", label: "Not picked yet" }, ...pieces.map((x) => ({ value: String(x.id), label: x.title }))];
   return (
     <Modal open onClose={onClose} title="Plan a test" wide>
@@ -100,10 +103,13 @@ function TestEditor({ c, onClose }: { c: Client; onClose: () => void }) {
           );
         }}
       >
-        <p className="text-muted-foreground text-sm">Change one thing only (the hook, the cover, the length, the time) and keep everything else the same. One test is an early sign; repeat a winner before treating it as a rule.</p>
+        <p className="text-muted-foreground text-sm">Change one thing only (the hook, the cover, the length, the time) and keep everything else the same. One pair of posts can't separate the change from timing or audience, so repeat the same test (same thing changed, same two versions) at least 3 times before treating it as a rule.</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="What you are testing" className="sm:col-span-2">
             <Input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="e.g. Face-to-camera hook vs exterior shot hook" required />
+          </Field>
+          <Field label="What you expect, and why (optional)" className="sm:col-span-2">
+            <Input value={f.hypothesis} onChange={(e) => setF({ ...f, hypothesis: e.target.value })} placeholder="e.g. A question hook gets more shares because people send it to someone it applies to" />
           </Field>
           <Field label="The one thing that changes">
             <NativeSelect value={f.variable} onChange={(v) => setF({ ...f, variable: v })} options={["hook", "cover", "length", "format", "caption", "time", "topic"].map((x) => ({ value: x, label: x[0].toUpperCase() + x.slice(1) }))} />
@@ -150,6 +156,7 @@ function TestRow({ c, t }: { c: Client; t: Test }) {
           {METRIC_LABEL[t.metric]} at {t.read_h === 24 ? "24 hours" : t.read_h === 720 ? "30 days" : "7 days"}
         </span>
       </div>
+      {t.hypothesis ? <p className="text-sm">Expected: {t.hypothesis}</p> : null}
       <p className="text-muted-foreground text-sm">
         A: {t.variant_a || "—"} ({name(t.content_a)}) · B: {t.variant_b || "—"} ({name(t.content_b)})
       </p>
@@ -157,7 +164,10 @@ function TestRow({ c, t }: { c: Client; t: Test }) {
         <div className="bg-muted/50 rounded-lg p-3 text-sm">
           <p className="font-medium">{t.result.verdict}</p>
           <p className="text-muted-foreground mt-1 text-xs">
-            A {t.result.a} vs B {t.result.b} ({t.metric.endsWith("_1k") ? "per 1,000 reached" : ""}) · reached {fmt(t.result.a_reach)} and {fmt(t.result.b_reach)} · chance B is better: {t.result.prob_b_better ?? "—"}%
+            A {t.result.a} vs B {t.result.b}
+            {t.metric.endsWith("_1k") ? " per 1,000 reached" : ""} · reached {fmt(t.result.a_reach)} and {fmt(t.result.b_reach)}
+            {t.result.pairs != null ? ` · ${t.result.pairs} pair${t.result.pairs === 1 ? "" : "s"} so far (B won ${t.result.wins ?? 0}, lost ${t.result.losses ?? 0})` : ""}
+            {t.result.prob_b_better != null ? ` · chance B wins a typical pair: ${t.result.prob_b_better}%` : " · no chance given until 3 pairs"}
           </p>
         </div>
       ) : null}
@@ -202,14 +212,14 @@ export function ResultsPanel() {
       .map((p) => {
         const h = (now - Date.parse(p.posted_at)) / 36e5;
         const r = posts.find((x) => x.content_id === p.id);
-        const need = h >= 18 && h <= 36 && !r?.d24 ? "24-hour" : h >= 134 && h <= 218 && !r?.d7 ? "7-day" : h >= 624 && h <= 840 && !r?.d30 ? "30-day" : "";
+        const need = h >= 20 && h <= 30 && !r?.d24 ? "24-hour" : h >= 144 && h <= 192 && !r?.d7 ? "7-day" : h >= 28 * 24 && h <= 33 * 24 && !r?.d30 ? "30-day" : "";
         return { p, need };
       })
       .filter((x) => x.need);
   }, [client, posts]);
   return (
     <>
-      <PageHead eyebrow="Results" title="What each post did, measured fairly" lead="Every post is read at 24 hours, 7 days and 30 days, and judged per 1,000 people reached. Sends and saves are the strongest signs a post is working." allowAll={false} />
+      <PageHead eyebrow="Results" title="What each post did, measured fairly" lead="Every post is read at 24 hours, 7 days and 30 days, and judged per 1,000 people reached. Shares and saves are the strongest signs a post is working." allowAll={false} />
       {!client ? (
         <NeedClient what="their results" />
       ) : (
@@ -219,12 +229,17 @@ export function ResultsPanel() {
               <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                 <Stat label="Posts with a 7-day read" value={client.results.normal.n} />
                 <Stat label="Typical 7-day views" value={client.results.normal.n >= 5 ? fmt(client.results.normal.views_7d) : "—"} />
-                <Stat label="Typical sends per 1K" value={client.results.normal.n >= 5 ? client.results.normal.sends_per_1k ?? "—" : "—"} />
+                <Stat label="Typical shares per 1K" value={client.results.normal.n >= 5 ? client.results.normal.sends_per_1k ?? "—" : "—"} />
                 <Stat label="Typical saves per 1K" value={client.results.normal.n >= 5 ? client.results.normal.saves_per_1k ?? "—" : "—"} />
               </div>
               {client.results.normal.n < 5 ? <p className="text-muted-foreground text-sm">The normal is set after 5 posts have a 7-day read ({client.results.normal.n} so far). Until then, posts are not called above or below normal.</p> : null}
             </Panel>
           </Grid>
+          {client.results.pending?.missed_7d.length ? (
+            <p className="text-muted-foreground text-sm">
+              Missed the 7-day window (no fair 7-day comparison possible): {client.results.pending.missed_7d.map((x) => x.title).join(", ")}.
+            </p>
+          ) : null}
           {awaiting.length ? (
             <div className="grid gap-2 rounded-xl border border-amber-500/50 bg-amber-500/5 p-4">
               <p className="font-medium">Check-ins due now</p>
@@ -258,7 +273,7 @@ export function ResultsPanel() {
                       <th scope="col" className="pb-2 text-left">Post</th>
                       <th scope="col" className="pb-2 pr-3 text-right">24h views</th>
                       <th scope="col" className="pb-2 pr-3 text-right">7d views</th>
-                      <th scope="col" className="pb-2 pr-3 text-right">Sends / 1K</th>
+                      <th scope="col" className="pb-2 pr-3 text-right">Shares / 1K</th>
                       <th scope="col" className="pb-2 pr-3 text-right">Saves / 1K</th>
                       <th scope="col" className="pb-2 pr-3 text-right">Link taps</th>
                       <th scope="col" className="pb-2 pr-3 text-right">30d views</th>
@@ -281,9 +296,12 @@ export function ResultsPanel() {
                           </span>
                         </th>
                         <td className="py-2.5 pr-3 text-right tabular-nums">{fmt(p.d24?.views)}</td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">{fmt(p.d7?.views)}</td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">{sig(p.d7, "sends_per_1k") ?? (p.d24?.signals ? <span className="text-muted-foreground">{p.d24.signals.sends_per_1k} (24h)</span> : "—")}</td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">{sig(p.d7, "saves_per_1k") ?? (p.d24?.signals ? <span className="text-muted-foreground">{p.d24.signals.saves_per_1k} (24h)</span> : "—")}</td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">
+                          {fmt(p.d7?.views)}
+                          {p.d7 ? <span className="text-muted-foreground block text-[11px]">at {(p.d7.age_h / 24).toFixed(1)} days</span> : null}
+                        </td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">{sig(p.d7, "sends_per_1k") ?? (p.d24?.signals?.sends_per_1k != null ? <span className="text-muted-foreground">{p.d24.signals.sends_per_1k} (24h)</span> : "—")}</td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">{sig(p.d7, "saves_per_1k") ?? (p.d24?.signals?.saves_per_1k != null ? <span className="text-muted-foreground">{p.d24.signals.saves_per_1k} (24h)</span> : "—")}</td>
                         <td className="py-2.5 pr-3 text-right tabular-nums">{fmt(p.d7?.link_taps)}</td>
                         <td className="py-2.5 pr-3 text-right tabular-nums">{fmt(p.d30?.views)}</td>
                         <td className="py-2.5 text-right tabular-nums">{p.vs_normal != null ? <Pill tone={p.vs_normal >= 1.5 ? "ok" : p.vs_normal < 0.7 ? "warn" : "muted"}>{p.vs_normal}×</Pill> : "—"}</td>
@@ -296,7 +314,7 @@ export function ResultsPanel() {
           </Section>
           <Section
             title="Tests"
-            text="A simple, honest read: the chance version B beats A given the counts, never called proof."
+            text="The unit is the post. One pair is reported as what happened on those two posts; a chance is only given once the same test has 3 or more pairs, and it is never called proof."
             action={
               <Button variant="outline" className="rounded-full" onClick={() => setTest(true)}>
                 <TestTube className="size-4" /> Plan a test

@@ -13,9 +13,9 @@ import { ReportView } from "@/agency/report-view";
 import { Empty, Grid, Panel, Skeleton, Stat } from "@/agency/ui";
 import { Wordmark } from "@/agency/wordmark";
 
-interface PortalPiece { id: number; title: string; kind: keyof typeof KIND_LABEL; platform: keyof typeof PLATFORM_LABEL; pillar: string; plan_date: string; status: "needs_approval" | "approved" | "posted"; hook: string; caption: string; script: string; compliance_ok: string; approved_by: string; approved_at: string; posted_at: string; post_url: string }
+interface PortalPiece { id: number; title: string; kind: keyof typeof KIND_LABEL; platform: keyof typeof PLATFORM_LABEL; pillar: string; plan_date: string; status: "needs_approval" | "approved" | "posted"; hook: string; caption: string; script: string; compliance_ok: string; approved_by: string; approved_at: string; posted_at: string; post_url: string; version: string }
 interface PortalData {
-  ok: boolean; error?: string; agency: { name: string }; month: string; today: string;
+  ok: boolean; error?: string; agency: { name: string }; month: string; today: string; measured_through?: string;
   client: { name: string; business: string; brokerage: string; market: string; platforms: string[]; form_url: string; renew_date: string };
   progress: Progress[]; content: PortalPiece[]; funnel: Funnel;
   leads: { id: number; created_at: string; source: LeadSource; platform: string; first_name: string; status: LeadStatus; response_min: number | null }[];
@@ -31,15 +31,39 @@ const key = () => {
   }
 };
 
+const NAME_KEY = "mbm-portal-name";
+const readName = () => {
+  try {
+    return localStorage.getItem(NAME_KEY) || "";
+  } catch {
+    return "";
+  }
+};
+const keepName = (n: string) => {
+  try {
+    if (n) localStorage.setItem(NAME_KEY, n);
+  } catch {
+    /* storage blocked: the name is just not remembered */
+  }
+};
+
 function Approve({ p, k, onDone }: { p: PortalPiece; k: string; onDone: () => void }) {
   const { busy, run } = useAction();
   const [ask, setAsk] = useState(false);
   const [note, setNote] = useState("");
+  const [name, setName] = useState(readName);
   const send = (action: "approve" | "changes") =>
     run(
       action,
       async () => {
-        await publicPost(PORTAL_ACTION_URL, { k, id: p.id, action, note });
+        keepName(name.trim());
+        try {
+          // version: the approval is for exactly the words on screen; if Meredith edited since, it is refused
+          await publicPost(PORTAL_ACTION_URL, { k, id: p.id, action, note, version: p.version, name: name.trim().slice(0, 40) });
+        } catch (e) {
+          if (e instanceof Error && /changed since/i.test(e.message)) onDone();
+          throw e;
+        }
         onDone();
       },
       action === "approve" ? "Approved. Meredith will post it." : "Sent to Meredith.",
@@ -59,7 +83,8 @@ function Approve({ p, k, onDone }: { p: PortalPiece; k: string; onDone: () => vo
           </div>
         </>
       ) : (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <input aria-label="Your name (optional)" placeholder="Your name (optional)" value={name} onChange={(e) => setName(e.target.value)} className="border-input bg-background h-8 w-44 rounded-md border px-2 text-sm" />
           <Button size="sm" className="rounded-full" disabled={!!busy} onClick={() => void send("approve")}>
             {busy ? <Spinner /> : <CheckCircle className="size-4" />} Approve
           </Button>
@@ -139,7 +164,7 @@ function PortalApp() {
                           <p className="text-muted-foreground mt-2 whitespace-pre-wrap">{p.script}</p>
                         </details>
                       ) : null}
-                      {p.compliance_ok === "yes" ? <p className="text-muted-foreground text-xs">Checked for your license details and Fair Housing wording.</p> : null}
+                      {p.compliance_ok === "yes" ? <p className="text-muted-foreground text-xs">Meredith ran the license-details and Fair Housing checklist on these exact words. Approving records your OK for this version only.</p> : null}
                       <Approve p={p} k={k} onDone={() => void load()} />
                     </Panel>
                   ))}
@@ -196,13 +221,16 @@ function PortalApp() {
             {posted.length ? (
               <section className="grid gap-4">
                 <h2 className="text-2xl font-semibold tracking-tight">What went out</h2>
+                <p className="text-muted-foreground -mt-2 text-sm">
+                  Numbers as of {day(d.measured_through || d.today)}. Each post is compared at 7 days old; a dash means it is not measured yet or the platform did not show that number.
+                </p>
                 <div className="-mx-1 overflow-x-auto px-1">
                   <table className="w-full min-w-[560px] text-sm">
                     <thead>
                       <tr className="text-muted-foreground border-b text-[11px] font-semibold tracking-[0.12em] uppercase">
                         <th scope="col" className="pb-2 text-left">Post</th>
                         <th scope="col" className="pb-2 pr-3 text-right">Views (7 days)</th>
-                        <th scope="col" className="pb-2 pr-3 text-right">Sends / 1K</th>
+                        <th scope="col" className="pb-2 pr-3 text-right">Shares / 1K</th>
                         <th scope="col" className="pb-2 text-right">Saves / 1K</th>
                       </tr>
                     </thead>

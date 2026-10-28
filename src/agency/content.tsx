@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-import { CopyButton, Field, Modal, NativeSelect, Pill, Spinner, useAction, Working } from "./bits";
+import { CopyButton, Field, Modal, NativeSelect, Pill, Spinner, useAction, useToast, Working } from "./bits";
 import {
   addMonths,
   api,
@@ -36,6 +36,7 @@ import { Empty, Panel } from "./ui";
 
 const KINDS: Kind[] = ["reel", "carousel", "post", "story", "gbp_post", "referral", "email", "listing"];
 const PLATS: Platform[] = ["instagram", "facebook", "tiktok", "gbp", "youtube", "email", "other"];
+const HOOK_TYPES = ["", "question", "bold claim", "list", "story", "reveal", "how-to"];
 
 function ComplianceBox({ comp }: { comp: Compliance }) {
   const bad = comp.checks.filter((c) => !c.ok);
@@ -43,7 +44,7 @@ function ComplianceBox({ comp }: { comp: Compliance }) {
     <div className={cn("grid gap-2 rounded-lg border p-3 text-sm", comp.ok ? "border-emerald-500/40 bg-emerald-500/5" : "border-amber-500/50 bg-amber-500/5")}>
       <p className="flex items-center gap-2 font-medium">
         {comp.ok ? <CheckCircle className="size-4 text-emerald-600" /> : <Danger className="size-4 text-amber-600" />}
-        {comp.ok ? "Passed the compliance check" : bad.length + " thing" + (bad.length === 1 ? "" : "s") + " to fix before approval"}
+        {comp.ok ? "No issues found by the checker" : bad.length + " thing" + (bad.length === 1 ? "" : "s") + " to fix or confirm before approval"}
         <span className="text-muted-foreground ml-auto text-xs font-normal">{when(comp.checked_at)}</span>
       </p>
       <ul className="grid gap-1.5">
@@ -52,13 +53,16 @@ function ComplianceBox({ comp }: { comp: Compliance }) {
             {c.ok ? <CheckCircle className="mt-0.5 size-3.5 shrink-0 text-emerald-600" /> : <Danger className="mt-0.5 size-3.5 shrink-0 text-amber-600" />}
             <span>
               <span className="font-medium">{c.rule}</span>
-              {c.source === "ai" ? <span className="text-muted-foreground text-xs"> · wording review</span> : null}
+              {c.source === "ai" ? <span className="text-muted-foreground text-xs"> · wording review</span> : c.source === "permission" ? <span className="text-muted-foreground text-xs"> · your confirmation</span> : null}
               {c.fix ? <span className="text-muted-foreground block">{c.fix}</span> : null}
             </span>
           </li>
         ))}
       </ul>
-      <p className="text-muted-foreground text-xs">A safety net, not legal advice. When in doubt, ask the brokerage.</p>
+      <p className="text-muted-foreground text-xs">
+        A checklist and word scan, not legal clearance. It cannot see photos, video or on-screen text. When in doubt, ask the brokerage.
+        {comp.answers?.confirmed_by ? " Answers confirmed by " + String(comp.answers.confirmed_by) + " " + when(String(comp.answers.confirmed_at || "")) + "." : ""}
+      </p>
     </div>
   );
 }
@@ -66,12 +70,15 @@ function ComplianceBox({ comp }: { comp: Compliance }) {
 function PieceEditor({ c, p, month, onClose }: { c: Client; p: Piece | null; month: string; onClose: () => void }) {
   const { refresh } = useStore();
   const { busy, run } = useAction();
-  const start = { title: p?.title || "", kind: p?.kind || "reel", platform: p?.platform || ((c.platforms[0] as Platform) || "instagram"), pillar: p?.pillar || "", plan_date: p?.plan_date || "", hook: p?.hook || "", caption: p?.caption || "", script: p?.script || "", notes: p?.notes || "", search_phrase: p?.search_phrase || "" };
+  const start = { title: p?.title || "", kind: p?.kind || "reel", platform: p?.platform || ((c.platforms[0] as Platform) || "instagram"), pillar: p?.pillar || "", plan_date: p?.plan_date || "", hook: p?.hook || "", caption: p?.caption || "", script: p?.script || "", notes: p?.notes || "", search_phrase: p?.search_phrase || "", hook_type: p?.hook_type || "", length_s: p?.length_s ? String(p.length_s) : "" };
   const [f, setF] = useState(start);
   const [id, setId] = useState<number | undefined>(p?.id);
   const [status, setStatus] = useState<ContentStatus>(p?.status || "draft");
   const [comp, setComp] = useState<Compliance | null>(p?.compliance || null);
-  const [ans, setAns] = useState({ photo_permission: !!p?.compliance?.answers?.photo_permission, paid: !!p?.compliance?.answers?.paid, other_broker_listing: !!p?.compliance?.answers?.other_broker_listing, listing_broker: String(p?.compliance?.answers?.listing_broker || "") });
+  const a0 = p?.compliance?.answers || {};
+  const [ans, setAns] = useState({ image_rights: !!(a0.image_rights || a0.photo_permission), owner_authorized: !!a0.owner_authorized, paid: !!a0.paid, other_broker_listing: !!a0.other_broker_listing, listing_broker: String(a0.listing_broker || ""), listing_broker_permission: !!a0.listing_broker_permission, broker_approved: !!a0.broker_approved });
+  const [factsChecked, setFactsChecked] = useState(false);
+  const needsBroker = !!c.onboarding?.broker_approval_required;
   const [postUrl, setPostUrl] = useState(p?.post_url || "");
   const [override, setOverride] = useState(false);
   const dirty = JSON.stringify(f) !== JSON.stringify(start) || !id;
@@ -81,7 +88,7 @@ function PieceEditor({ c, p, month, onClose }: { c: Client; p: Piece | null; mon
 
   const saveWords = async () => {
     if (!f.title.trim()) throw new Error("Give it a title first.");
-    const r = await api.saveContent(c.client_key, f as Partial<Piece>, id);
+    const r = await api.saveContent(c.client_key, { ...f, length_s: f.length_s ? Number(f.length_s) : null } as Partial<Piece>, id);
     if (r.id) setId(r.id);
     if (JSON.stringify(f) !== JSON.stringify(start) && comp) setComp(null); // edited words: the old check no longer applies
     return r.id || id;
@@ -95,7 +102,7 @@ function PieceEditor({ c, p, month, onClose }: { c: Client; p: Piece | null; mon
       await refresh();
       return r;
     });
-  const move = (to: ContentStatus, okText: string, extra: { by?: string; post_url?: string } = {}) =>
+  const move = (to: ContentStatus, okText: string, extra: { by?: string; post_url?: string; facts_checked?: boolean } = {}) =>
     run(
       to,
       async () => {
@@ -137,6 +144,16 @@ function PieceEditor({ c, p, month, onClose }: { c: Client; p: Piece | null; mon
           <Field label="Hook (first 2 seconds or first line)" className="sm:col-span-2">
             <Input value={f.hook} onChange={(e) => set("hook", e.target.value)} />
           </Field>
+          <Field label="Hook type" hint="Lets results compare hook styles over time">
+            <NativeSelect value={f.hook_type} onChange={(v) => set("hook_type", v)} options={HOOK_TYPES.map((h) => ({ value: h, label: h ? h[0].toUpperCase() + h.slice(1) : "Not set" }))} />
+          </Field>
+          {f.kind === "reel" || f.kind === "story" ? (
+            <Field label="Length (seconds)">
+              <Input inputMode="numeric" value={f.length_s} onChange={(e) => set("length_s", e.target.value.replace(/[^0-9]/g, "").slice(0, 4))} />
+            </Field>
+          ) : (
+            <div />
+          )}
           <Field label="Caption" className="sm:col-span-2" hint={line ? (hasLine ? "Disclosure line found." : "Ends with the disclosure line: " + line) : "Add the licensed name, title and brokerage on the Clients tab."}>
             <Textarea rows={6} value={f.caption} onChange={(e) => set("caption", e.target.value)} />
           </Field>
@@ -163,15 +180,32 @@ function PieceEditor({ c, p, month, onClose }: { c: Client; p: Piece | null; mon
           </p>
           <div className="grid gap-2 text-sm sm:grid-cols-2">
             <label className="flex items-center gap-2">
-              <input type="checkbox" className="accent-[var(--primary)] size-4" checked={ans.photo_permission} onChange={(e) => setAns({ ...ans, photo_permission: e.target.checked })} /> We have permission for every photo and video
+              <input type="checkbox" className="accent-[var(--primary)] size-4" checked={ans.image_rights} onChange={(e) => setAns({ ...ans, image_rights: e.target.checked })} /> We have the rights to every photo, video and song
             </label>
+            {f.kind === "listing" ? (
+              <label className="flex items-center gap-2">
+                <input type="checkbox" className="accent-[var(--primary)] size-4" checked={ans.owner_authorized} onChange={(e) => setAns({ ...ans, owner_authorized: e.target.checked })} /> The owner authorized advertising this property
+              </label>
+            ) : null}
+            {needsBroker ? (
+              <label className="flex items-center gap-2">
+                <input type="checkbox" className="accent-[var(--primary)] size-4" checked={ans.broker_approved} onChange={(e) => setAns({ ...ans, broker_approved: e.target.checked })} /> The brokerage approved this piece
+              </label>
+            ) : null}
             <label className="flex items-center gap-2">
               <input type="checkbox" className="accent-[var(--primary)] size-4" checked={ans.paid} onChange={(e) => setAns({ ...ans, paid: e.target.checked })} /> This will run as a paid ad or boost
             </label>
             <label className="flex items-center gap-2">
               <input type="checkbox" className="accent-[var(--primary)] size-4" checked={ans.other_broker_listing} onChange={(e) => setAns({ ...ans, other_broker_listing: e.target.checked })} /> It shows another brokerage's listing
             </label>
-            {ans.other_broker_listing ? <Input className="h-8" placeholder="Listing brokerage name" value={ans.listing_broker} onChange={(e) => setAns({ ...ans, listing_broker: e.target.value })} /> : null}
+            {ans.other_broker_listing ? (
+              <>
+                <Input className="h-8" placeholder="Listing brokerage name" value={ans.listing_broker} onChange={(e) => setAns({ ...ans, listing_broker: e.target.value })} />
+                <label className="flex items-center gap-2 sm:col-span-2">
+                  <input type="checkbox" className="accent-[var(--primary)] size-4" checked={ans.listing_broker_permission} onChange={(e) => setAns({ ...ans, listing_broker_permission: e.target.checked })} /> The listing broker gave permission to advertise it (a credit line alone is not permission)
+                </label>
+              </>
+            ) : null}
           </div>
           {ans.paid ? <p className="text-muted-foreground text-xs">Meta treats housing ads as a special category: audience age, gender and ZIP targeting are limited. Set the ad category to Housing when boosting.</p> : null}
           <Button variant="outline" className="w-fit rounded-full" disabled={!!busy} onClick={() => void check()}>
@@ -212,9 +246,15 @@ function PieceEditor({ c, p, month, onClose }: { c: Client; p: Piece | null; mon
           ) : status === "approved" ? (
             <div className="grid gap-2">
               <p className="text-muted-foreground text-sm">Post it yourself on {PLATFORM_LABEL[f.platform as Platform] || f.platform}, then paste the link so results can be tracked.</p>
+              {f.kind === "listing" ? (
+                <label className="flex items-start gap-2 text-sm">
+                  <input type="checkbox" className="accent-[var(--primary)] mt-0.5 size-4" checked={factsChecked} onChange={(e) => setFactsChecked(e.target.checked)} />
+                  <span>I rechecked the price, status and open-house dates against the current listing today</span>
+                </label>
+              ) : null}
               <div className="flex flex-wrap gap-2">
                 <Input className="max-w-sm" placeholder="https://www.instagram.com/p/…" value={postUrl} onChange={(e) => setPostUrl(e.target.value)} />
-                <Button className="rounded-full" disabled={!!busy} onClick={() => void move("posted", "Marked posted. Add a check-in after 24 hours.", { by: "Meredith", post_url: postUrl.trim() })}>
+                <Button className="rounded-full" disabled={!!busy || (f.kind === "listing" && !factsChecked)} onClick={() => void move("posted", "Marked posted. Add a check-in after 24 hours.", { by: "Meredith", post_url: postUrl.trim(), facts_checked: f.kind === "listing" ? factsChecked : undefined })}>
                   Mark posted
                 </Button>
               </div>
@@ -246,6 +286,8 @@ export function ContentPanel() {
   const [show, setShow] = useState<"all" | ContentStatus>("all");
   const { busy, run } = useAction();
   const { refresh } = useStore();
+  const toast = useToast();
+  const [ask, setAsk] = useState<{ kind: "plan" | "referral"; text: string } | null>(null);
   const pieces = useMemo(() => (client ? client.content.filter((x) => (x.plan_date || (x.posted_at || "").slice(0, 10) || x.updated_at.slice(0, 10)).slice(0, 7) === month) : []), [client, month]);
   const shown = pieces.filter((x) => (show === "all" ? x.status !== "dropped" : x.status === show));
   const byDay = shown.reduce<Record<string, Piece[]>>((m, x) => {
@@ -254,17 +296,25 @@ export function ContentPanel() {
     return m;
   }, {});
   const days = Object.keys(byDay).sort((a, b) => (a === "No date yet" ? 1 : b === "No date yet" ? -1 : a.localeCompare(b)));
-  const draft = (kind: "plan" | "referral") =>
+  const draft = (kind: "plan" | "referral", confirm = false) =>
     client &&
-    run(
-      kind,
-      async () => {
-        const r = await api.draft(client.client_key, month, kind);
+    run(kind, async () => {
+      setAsk(null);
+      try {
+        const r = await api.draft(client.client_key, month, kind, confirm);
         await refresh();
+        toast(kind === "plan" ? "Drafts are in. Each one still needs your edit and the compliance check." : "Referral pack drafted.");
         return r;
-      },
-      kind === "plan" ? "Drafts are in. Each one still needs your edit and the compliance check." : "Referral pack drafted.",
-    );
+      } catch (e) {
+        const m = e instanceof Error ? e.message : "";
+        // a second run for the same month would add a second full set: ask first
+        if (m.startsWith("ALREADY_DRAFTED:")) {
+          setAsk({ kind, text: m.replace("ALREADY_DRAFTED:", "").trim() });
+          return null;
+        }
+        throw e;
+      }
+    });
   return (
     <>
       <PageHead eyebrow="Content" title="The plan, approvals and posting" lead="Draft, check, send for approval, then post it yourself and log the link. AI drafts never skip the compliance check or the client's OK." allowAll={false} />
@@ -295,6 +345,18 @@ export function ContentPanel() {
             </div>
           </div>
           {busy === "plan" || busy === "referral" ? <Working text="Drafting from the contract, their market and voice. About a minute…" /> : null}
+          {ask ? (
+            <div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/50 bg-amber-500/5 p-3 text-sm">
+              <Danger className="size-4 shrink-0 text-amber-600" />
+              <span className="min-w-0 flex-1">{ask.text}</span>
+              <Button size="sm" variant="outline" className="rounded-full" onClick={() => void draft(ask.kind, true)}>
+                Draft another set
+              </Button>
+              <Button size="sm" variant="ghost" className="rounded-full" onClick={() => setAsk(null)}>
+                Keep what is there
+              </Button>
+            </div>
+          ) : null}
           {month === d?.month && client.progress.filter((p) => p.kind !== "report").length ? (
             <Panel eyebrow="This month vs the contract" className="lg:col-span-6">
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -341,7 +403,7 @@ export function ContentPanel() {
                           {x.hook ? <span className="text-muted-foreground block truncate text-sm">{x.hook}</span> : null}
                         </span>
                         <span className="flex flex-wrap items-center gap-1.5">
-                          {x.compliance_ok === "yes" ? <Pill tone="ok">Checked</Pill> : x.compliance_ok === "no" ? <Pill tone="warn">Needs fixes</Pill> : x.status === "draft" || x.status === "idea" ? <Pill>Not checked</Pill> : null}
+                          {x.compliance_ok === "yes" ? <Pill tone="ok">No issues found</Pill> : x.compliance_ok === "no" ? <Pill tone="warn">Needs fixes</Pill> : x.status === "draft" || x.status === "idea" ? <Pill>Not checked</Pill> : null}
                           <StatusPill status={x.status} />
                         </span>
                       </button>

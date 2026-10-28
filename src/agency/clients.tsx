@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
 import { CopyButton, Field, Modal, NativeSelect, Pill, Spinner, useAction } from "./bits";
-import { api, CONTRACT_KINDS, disclosureLine, KIND_LABEL, PLATFORM_LABEL, PLATFORMS, type Client, type Kind } from "./data";
+import { api, CONTRACT_KINDS, disclosureLine, KIND_LABEL, monthLabel, PLATFORM_LABEL, PLATFORMS, type Client, type Kind, type Payment } from "./data";
 import { PageHead, scopeClients, Section } from "./page";
 import { useStore } from "./store";
 import { Empty, Grid, Panel, Skeleton } from "./ui";
@@ -29,9 +29,43 @@ export const ONBOARDING: { key: string; label: string; hint?: string }[] = [
   { key: "past_clients", label: "Agent has a past-client list for referral emails", hint: "The agent keeps it; the studio only drafts the emails" },
 ];
 
-type Draft = Record<string, string | boolean | string[] | Record<string, string> | Record<string, boolean | string>>;
-const blank = (): Draft => ({ name: "", business: "", license_name: "", license_title: "Licensed Real Estate Salesperson", brokerage: "", team_name: "", market: "", platforms: ["instagram", "facebook", "tiktok", "gbp"], handles: {}, alert_email: "", alert_leads: true, status: "active", start_date: "", renew_date: "", fee: "", voice: "", approved_claims: "", disclosures: "", notes: "", onboarding: {} });
-const fromClient = (c: Client): Draft => ({ ...blank(), ...Object.fromEntries(Object.entries(c).filter(([, v]) => typeof v === "string" || typeof v === "boolean")), platforms: c.platforms, handles: c.handles || {}, onboarding: c.onboarding || {}, fee: c.fee ? String(c.fee) : "" });
+type Draft = Record<string, string | boolean | string[] | Record<string, string> | Record<string, boolean | string> | Payment[]>;
+const blank = (): Draft => ({ name: "", business: "", license_name: "", license_title: "Licensed Real Estate Salesperson", brokerage: "", team_name: "", market: "", platforms: ["instagram", "facebook", "tiktok", "gbp"], handles: {}, alert_email: "", alert_leads: true, status: "active", start_date: "", renew_date: "", fee: "", voice: "", approved_claims: "", disclosures: "", notes: "", onboarding: {}, broker_contact: "", sop_url: "", fair_housing_url: "", payments: [] });
+const fromClient = (c: Client): Draft => ({ ...blank(), ...Object.fromEntries(Object.entries(c).filter(([, v]) => typeof v === "string" || typeof v === "boolean")), platforms: c.platforms, handles: c.handles || {}, onboarding: c.onboarding || {}, payments: c.payments || [], fee: c.fee ? String(c.fee) : "" });
+const isHttps = (u: string) => !u || /^https:\/\/\S+$/.test(u);
+
+function Payments({ list, onChange, fee }: { list: Payment[]; onChange: (p: Payment[]) => void; fee: string }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const add = () => onChange([...list, { month: today.slice(0, 7), amount: Number(String(fee).replace(/[^0-9.]/g, "")) || 0, received: today }]);
+  const up = (i: number, k: keyof Payment, v: string) => onChange(list.map((p, j) => (j === i ? { ...p, [k]: k === "amount" ? Number(v.replace(/[^0-9.]/g, "")) || 0 : v } : p)));
+  return (
+    <div className="grid gap-2">
+      {list.length ? (
+        list.map((p, i) => (
+          <div key={i} className="grid grid-cols-[1fr_1fr_1fr_auto] items-end gap-2">
+            <Field label={i ? "" : "For month"}>
+              <Input type="month" value={p.month} onChange={(e) => up(i, "month", e.target.value)} aria-label="Month paid for" />
+            </Field>
+            <Field label={i ? "" : "Amount ($)"}>
+              <Input inputMode="decimal" value={String(p.amount || "")} onChange={(e) => up(i, "amount", e.target.value)} aria-label="Amount" />
+            </Field>
+            <Field label={i ? "" : "Received"}>
+              <Input type="date" value={p.received} onChange={(e) => up(i, "received", e.target.value)} aria-label="Date received" />
+            </Field>
+            <Button type="button" size="sm" variant="ghost" onClick={() => onChange(list.filter((_, j) => j !== i))}>
+              Remove
+            </Button>
+          </div>
+        ))
+      ) : (
+        <p className="text-muted-foreground text-sm">No payments recorded yet.</p>
+      )}
+      <Button type="button" size="sm" variant="outline" className="w-fit rounded-full" onClick={add}>
+        <AddCircle className="size-4" /> Record a payment
+      </Button>
+    </div>
+  );
+}
 
 function ClientEditor({ open, onClose, c }: { open: boolean; onClose: () => void; c: Client | null }) {
   const { refresh } = useStore();
@@ -48,6 +82,7 @@ function ClientEditor({ open, onClose, c }: { open: boolean; onClose: () => void
       "save",
       async () => {
         if (!str("name").trim()) throw new Error("Add the client's name first.");
+        if (!isHttps(str("sop_url")) || !isHttps(str("fair_housing_url"))) throw new Error("Website notice links must start with https://");
         const r = await api.saveClient({ ...f, id: c?.id } as never, c?.client_key);
         await refresh();
         onClose();
@@ -91,11 +126,31 @@ function ClientEditor({ open, onClose, c }: { open: boolean; onClose: () => void
             <Field label="Team name (optional)" hint='Must include "team" and appear with the brokerage'>
               <Input value={str("team_name")} onChange={(e) => set("team_name", e.target.value)} />
             </Field>
-            <Field label="Disclosure line (optional)" hint="Leave blank to use name, title and brokerage" className="sm:col-span-2">
-              <Input value={str("disclosures")} onChange={(e) => set("disclosures", e.target.value)} placeholder={disclosureLine({ disclosures: "", license_name: str("license_name"), license_title: str("license_title"), brokerage: str("brokerage") })} />
+            <Field label="Brokerage office address or phone" hint="Required on ads in New York. The check looks for it in every post and email." className="sm:col-span-2">
+              <Input value={str("broker_contact")} onChange={(e) => set("broker_contact", e.target.value)} placeholder="e.g. (718) 555-0100 or 12 Main St, Astoria NY" />
             </Field>
+            <Field label="Disclosure line (optional)" hint="Leave blank to use name, title, brokerage and its address or phone" className="sm:col-span-2">
+              <Input value={str("disclosures")} onChange={(e) => set("disclosures", e.target.value)} placeholder={disclosureLine({ disclosures: "", license_name: str("license_name"), license_title: str("license_title"), brokerage: str("brokerage"), broker_contact: str("broker_contact") })} />
+            </Field>
+            <label className="flex items-start gap-2.5 text-sm sm:col-span-2">
+              <input type="checkbox" className="accent-[var(--primary)] mt-0.5 size-4" checked={!!ob.broker_approval_required} onChange={(e) => set("onboarding", { ...ob, broker_approval_required: e.target.checked })} />
+              <span>
+                The brokerage approves each post before it goes out
+                <span className="text-muted-foreground block text-xs">The compliance check then asks for their OK on every piece.</span>
+              </span>
+            </label>
             <Field label="Claims they can back up" hint="Only these may appear in posts, e.g. sales they closed, years licensed. Anything else gets flagged." className="sm:col-span-2">
               <Textarea rows={2} value={str("approved_claims")} onChange={(e) => set("approved_claims", e.target.value)} />
+            </Field>
+          </div>
+        </Section>
+        <Section title="Website notices" text="New York requires agent websites to link the Standard Operating Procedures and the Fair Housing notice. The inquiry form shows both links when they are set.">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Standard Operating Procedures link" hint={isHttps(str("sop_url")) ? "From the brokerage" : "Must start with https://"}>
+              <Input value={str("sop_url")} onChange={(e) => set("sop_url", e.target.value)} placeholder="https://…" />
+            </Field>
+            <Field label="Fair Housing notice link" hint={isHttps(str("fair_housing_url")) ? "The NY State notice or the brokerage copy" : "Must start with https://"}>
+              <Input value={str("fair_housing_url")} onChange={(e) => set("fair_housing_url", e.target.value)} placeholder="https://…" />
             </Field>
           </div>
         </Section>
@@ -131,6 +186,9 @@ function ClientEditor({ open, onClose, c }: { open: boolean; onClose: () => void
               <NativeSelect value={str("status")} onChange={(v) => set("status", v)} options={["active", "paused", "ended", "removed"].map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) }))} />
             </Field>
           </div>
+        </Section>
+        <Section title="Payments received" text="Private to you. Never shown on the client portal.">
+          <Payments list={(f.payments as Payment[]) || []} onChange={(p) => set("payments", p)} fee={str("fee")} />
         </Section>
         <Section title="Voice and notes">
           <div className="grid gap-4">
@@ -296,6 +354,14 @@ export function ClientsPanel() {
                         <span className="text-muted-foreground">Disclosure: </span>
                         {disclosureLine(c) || <span className="text-amber-700 dark:text-amber-400">Add the licensed name, title and brokerage</span>}
                       </p>
+                      {!c.broker_contact ? <p className="text-amber-700 dark:text-amber-400">Add the brokerage address or phone: New York ads need it.</p> : null}
+                      {!c.sop_url || !c.fair_housing_url ? <p className="text-muted-foreground">Website notices: {[!c.sop_url ? "SOP link" : "", !c.fair_housing_url ? "Fair Housing link" : ""].filter(Boolean).join(" and ")} not set yet.</p> : null}
+                      {c.payments?.length ? (
+                        <p className="text-muted-foreground">
+                          Last payment: {monthLabel(c.payments[c.payments.length - 1].month)}, ${c.payments[c.payments.length - 1].amount.toLocaleString("en-US")}
+                          {c.payments[c.payments.length - 1].received ? " received " + c.payments[c.payments.length - 1].received : ""}
+                        </p>
+                      ) : null}
                       <div className="flex flex-wrap gap-1.5">
                         {c.platforms.map((p) => (
                           <Pill key={p}>{PLATFORM_LABEL[p as keyof typeof PLATFORM_LABEL] || p}</Pill>

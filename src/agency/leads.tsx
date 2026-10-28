@@ -13,12 +13,24 @@ import { Empty, Grid, Panel, Stat } from "./ui";
 
 const STATUSES = Object.keys(LEAD_STATUS_LABEL) as LeadStatus[];
 const SOURCES = Object.keys(SOURCE_LABEL) as LeadSource[];
+/** datetime-local value (the device's own time) <-> ISO */
+const toLocal = (iso: string) => {
+  const t = Date.parse(iso || "");
+  if (!Number.isFinite(t)) return "";
+  const d = new Date(t);
+  return new Date(t - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16);
+};
+const fromLocal = (v: string) => (v && Number.isFinite(Date.parse(v)) ? new Date(v).toISOString() : "");
+const nowLocal = () => toLocal(new Date().toISOString());
 
 function LeadEditor({ c, l, onClose }: { c: Client; l: Lead | null; onClose: () => void }) {
   const { refresh } = useStore();
   const { busy, run } = useAction();
   const [f, setF] = useState({ source: l?.source || "dm", platform: l?.platform || "instagram", name: l?.name || "", contact: l?.contact || "", message: l?.message || "", post_url: l?.post_url || "", status: l?.status || "new", heard_about: l?.heard_about || "", value: l?.value ? String(l.value) : "", notes: l?.notes || "" });
   const set = (k: keyof typeof f, v: string) => setF((x) => ({ ...x, [k]: v }));
+  const [got, setGot] = useState(l ? toLocal(l.created_at) : "");
+  const [replied, setReplied] = useState(l?.first_reply_at ? toLocal(l.first_reply_at) : "");
+  const canFixTime = !l || l.received_how !== "form";
   return (
     <Modal open onClose={onClose} title={l ? "Lead: " + (l.name || "no name") : "Log a lead"} wide>
       <form
@@ -28,7 +40,13 @@ function LeadEditor({ c, l, onClose }: { c: Client; l: Lead | null; onClose: () 
           void run(
             "save",
             async () => {
-              await api.saveLead(c.client_key, { ...f, value: Number(f.value) || 0 } as unknown as Partial<Lead>, l?.id);
+              const extra: { received_at?: string; replied_at?: string } = {};
+              // compared at the minute shown, so an untouched field is never re-sent as "entered by hand"
+              if (canFixTime && got && got !== (l ? toLocal(l.created_at) : "")) extra.received_at = fromLocal(got);
+              if (replied && replied !== (l?.first_reply_at ? toLocal(l.first_reply_at) : "")) extra.replied_at = fromLocal(replied);
+              if (extra.received_at && Date.parse(extra.received_at) > Date.now() + 6e4) throw new Error("When it came in can't be in the future.");
+              if (extra.replied_at && Date.parse(extra.replied_at) < Date.parse(extra.received_at || l?.created_at || new Date().toISOString())) throw new Error("The first reply can't be before the lead came in.");
+              await api.saveLead(c.client_key, { ...f, value: Number(f.value) || 0, ...extra } as unknown as Partial<Lead>, l?.id);
               await refresh();
               onClose();
             },
@@ -39,7 +57,9 @@ function LeadEditor({ c, l, onClose }: { c: Client; l: Lead | null; onClose: () 
         {l ? (
           <p className="text-muted-foreground text-sm">
             Came in {when(l.created_at)}
+            {l.received_how === "logged" ? " (the time it was logged; set the real time below if you know it)" : ""}
             {l.first_reply_at ? ` · first reply after ${mins(l.response_min)}` : " · no reply logged yet"}
+            {l.possible_duplicate_of ? " · same contact as an earlier lead" : ""}
           </p>
         ) : null}
         <div className="grid gap-4 sm:grid-cols-2">
@@ -63,6 +83,16 @@ function LeadEditor({ c, l, onClose }: { c: Client; l: Lead | null; onClose: () 
           </Field>
           <Field label="How they heard about the agent">
             <Input value={f.heard_about} onChange={(e) => set("heard_about", e.target.value)} />
+          </Field>
+          {canFixTime ? (
+            <Field label="When it came in" hint={l ? "Your device's time" : "Leave blank for now. For a DM or call from earlier, set when it arrived so reply time is honest."}>
+              <Input type="datetime-local" value={got} max={nowLocal()} onChange={(e) => setGot(e.target.value)} />
+            </Field>
+          ) : (
+            <div />
+          )}
+          <Field label="When you first replied (optional)" hint="Leave blank and it is logged when the status leaves New">
+            <Input type="datetime-local" value={replied} max={nowLocal()} onChange={(e) => setReplied(e.target.value)} />
           </Field>
           <Field label="Where it stands">
             <NativeSelect value={f.status} onChange={(v) => set("status", v)} options={STATUSES.map((s) => ({ value: s, label: LEAD_STATUS_LABEL[s] }))} />
@@ -130,6 +160,16 @@ export function LeadsPanel() {
                 <Stat label="Closed" value={client.funnel.closed} />
                 <Stat label="Typical first reply (30 days)" value={<span className="text-2xl">{mins(client.funnel.median_response_min)}</span>} />
               </div>
+              {client.funnel.waiting ? (
+                <p className="text-sm text-amber-700 dark:text-amber-400">
+                  {client.funnel.waiting} waiting for a first reply{client.funnel.oldest_waiting_min != null ? ", the oldest for " + mins(client.funnel.oldest_waiting_min) : ""}.
+                </p>
+              ) : null}
+              {client.funnel.from_logging ? (
+                <p className="text-muted-foreground text-xs">
+                  {client.funnel.from_logging} of the reply times count from when the lead was logged, not when it arrived. Set “When it came in” on those leads for an honest number.
+                </p>
+              ) : null}
               {client.funnel.by_source.length ? (
                 <p className="text-muted-foreground text-sm">From: {client.funnel.by_source.map((s) => (SOURCE_LABEL[s.source as LeadSource] || s.source) + " " + s.n).join(" · ")}</p>
               ) : null}
@@ -161,7 +201,8 @@ export function LeadsPanel() {
                       <span className="text-muted-foreground block truncate text-sm">
                         {SOURCE_LABEL[l.source] || l.source}
                         {l.platform ? " · " + l.platform : ""} · {when(l.created_at)}
-                        {l.first_reply_at ? " · replied in " + mins(l.response_min) : ""}
+                        {l.first_reply_at ? " · replied in " + mins(l.response_min) + (l.received_how === "logged" ? " (from logging)" : "") : ""}
+                        {l.possible_duplicate_of ? " · possible repeat" : ""}
                         {l.value ? " · $" + fmt(l.value) : ""}
                         {l.message ? " · “" + l.message + "”" : ""}
                       </span>
