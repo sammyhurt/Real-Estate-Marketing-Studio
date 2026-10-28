@@ -1,0 +1,284 @@
+import CheckCircle from "@iconify-react/solar/check-circle-linear";
+import { useCallback, useEffect, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { ThemeToggle } from "@/components/utility/theme-toggle";
+
+import { CopyButton, Pill, Spinner, ToastProvider, useAction } from "@/agency/bits";
+import { day, fmt, KIND_LABEL, LEAD_STATUS_LABEL, mins, monthLabel, PLATFORM_LABEL, PORTAL_ACTION_URL, PORTAL_URL, publicPost, SOURCE_LABEL, type Funnel, type LeadSource, type LeadStatus, type Progress, type Report, type Results, type ReviewStats, type TestResult } from "@/agency/data";
+import Footer from "@/agency/footer";
+import { Bar } from "@/agency/marks";
+import { ReportView } from "@/agency/report-view";
+import { Empty, Grid, Panel, Skeleton, Stat } from "@/agency/ui";
+import { Wordmark } from "@/agency/wordmark";
+
+interface PortalPiece { id: number; title: string; kind: keyof typeof KIND_LABEL; platform: keyof typeof PLATFORM_LABEL; pillar: string; plan_date: string; status: "needs_approval" | "approved" | "posted"; hook: string; caption: string; script: string; compliance_ok: string; approved_by: string; approved_at: string; posted_at: string; post_url: string }
+interface PortalData {
+  ok: boolean; error?: string; agency: { name: string }; month: string; today: string;
+  client: { name: string; business: string; brokerage: string; market: string; platforms: string[]; form_url: string; renew_date: string };
+  progress: Progress[]; content: PortalPiece[]; funnel: Funnel;
+  leads: { id: number; created_at: string; source: LeadSource; platform: string; first_name: string; status: LeadStatus; response_min: number | null }[];
+  reviews: { stats: ReviewStats; list: { date: string; rating: number; reviewer: string; text: string; replied: boolean }[] };
+  results: Results; tests: { title: string; variable: string; variant_a: string; variant_b: string; result: TestResult | null }[]; reports: Report[];
+}
+
+const key = () => {
+  try {
+    return (new URLSearchParams(location.search).get("k") || "").replace(/[^a-z0-9]/gi, "").slice(0, 24);
+  } catch {
+    return "";
+  }
+};
+
+function Approve({ p, k, onDone }: { p: PortalPiece; k: string; onDone: () => void }) {
+  const { busy, run } = useAction();
+  const [ask, setAsk] = useState(false);
+  const [note, setNote] = useState("");
+  const send = (action: "approve" | "changes") =>
+    run(
+      action,
+      async () => {
+        await publicPost(PORTAL_ACTION_URL, { k, id: p.id, action, note });
+        onDone();
+      },
+      action === "approve" ? "Approved. Meredith will post it." : "Sent to Meredith.",
+    );
+  return (
+    <div className="grid gap-2">
+      {ask ? (
+        <>
+          <Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="What would you like changed?" />
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" className="rounded-full" disabled={!!busy || !note.trim()} onClick={() => void send("changes")}>
+              {busy ? <Spinner /> : null} Send to Meredith
+            </Button>
+            <Button size="sm" variant="ghost" className="rounded-full" onClick={() => setAsk(false)}>
+              Cancel
+            </Button>
+          </div>
+        </>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" className="rounded-full" disabled={!!busy} onClick={() => void send("approve")}>
+            {busy ? <Spinner /> : <CheckCircle className="size-4" />} Approve
+          </Button>
+          <Button size="sm" variant="outline" className="rounded-full" disabled={!!busy} onClick={() => setAsk(true)}>
+            Ask for changes
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PortalApp() {
+  const k = key();
+  const [d, setD] = useState<PortalData | null>(null);
+  const [err, setErr] = useState("");
+  const load = useCallback(async () => {
+    if (k.length !== 24) {
+      setErr("This link is not complete. Ask Meredith to send it again.");
+      return;
+    }
+    try {
+      const r = await fetch(PORTAL_URL + "?k=" + encodeURIComponent(k), { cache: "no-store" });
+      const j = (await r.json()) as PortalData;
+      if (!j.ok) setErr(j.error || "This link is off or out of date. Ask Meredith for a new one.");
+      else {
+        setD(j);
+        setErr("");
+      }
+    } catch {
+      setErr("Could not load your page. Check your connection and refresh.");
+    }
+  }, [k]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const waiting = d?.content.filter((x) => x.status === "needs_approval") || [];
+  const upcoming = d?.content.filter((x) => x.status === "approved") || [];
+  const posted = d?.content.filter((x) => x.status === "posted").sort((a, b) => b.posted_at.localeCompare(a.posted_at)) || [];
+  const latestReport = d?.reports.find((r) => r.body) || null;
+  return (
+    <div className="flex min-h-screen flex-col">
+      <header className="container flex items-center justify-between py-6">
+        <Wordmark label="Client portal" />
+        <ThemeToggle />
+      </header>
+      <main className="container flex-1 pb-20">
+        {err ? (
+          <div className="mx-auto max-w-md py-24 text-center">
+            <p className="text-lg font-semibold">{err}</p>
+          </div>
+        ) : !d ? (
+          <Skeleton className="h-96" />
+        ) : (
+          <div className="grid gap-10">
+            <div className="pt-6">
+              <p className="text-muted-foreground text-sm">{monthLabel(d.month)}</p>
+              <h1 className="mt-1 text-4xl font-semibold tracking-tight md:text-5xl">Hi {d.client.name.split(" ")[0]}, here is your marketing.</h1>
+              <p className="text-muted-foreground mt-3 max-w-2xl">What is planned, what needs your OK, what went out, and what it did. Numbers come from each platform's own insights.</p>
+            </div>
+
+            <section className="grid gap-4">
+              <h2 className="text-2xl font-semibold tracking-tight">Waiting for your OK {waiting.length ? <Pill tone="warn">{waiting.length}</Pill> : null}</h2>
+              {!waiting.length ? (
+                <Empty>Nothing needs you right now.</Empty>
+              ) : (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {waiting.map((p) => (
+                    <Panel key={p.id} eyebrow={(KIND_LABEL[p.kind] || p.kind) + " · " + (PLATFORM_LABEL[p.platform] || p.platform) + (p.plan_date ? " · " + day(p.plan_date) : "")}>
+                      <h3 className="text-lg font-semibold">{p.title}</h3>
+                      {p.hook ? <p className="font-medium">“{p.hook}”</p> : null}
+                      {p.caption ? <p className="text-sm whitespace-pre-wrap">{p.caption}</p> : null}
+                      {p.script ? (
+                        <details className="text-sm">
+                          <summary className="cursor-pointer font-medium">Script / slides</summary>
+                          <p className="text-muted-foreground mt-2 whitespace-pre-wrap">{p.script}</p>
+                        </details>
+                      ) : null}
+                      {p.compliance_ok === "yes" ? <p className="text-muted-foreground text-xs">Checked for your license details and Fair Housing wording.</p> : null}
+                      <Approve p={p} k={k} onDone={() => void load()} />
+                    </Panel>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <Grid>
+              <Panel eyebrow="This month vs your plan" className="lg:col-span-3">
+                {d.progress.filter((p) => p.kind !== "report").length ? (
+                  d.progress
+                    .filter((p) => p.kind !== "report")
+                    .map((p) => (
+                      <div key={p.kind} className="grid gap-1">
+                        <div className="flex justify-between text-sm">
+                          <span>{p.label}</span>
+                          <span className="text-muted-foreground tabular-nums">
+                            {p.delivered} of {p.promised} posted
+                            {p.lined_up ? " · " + p.lined_up + " lined up" : ""}
+                          </span>
+                        </div>
+                        <Bar value={p.delivered} max={p.promised} />
+                      </div>
+                    ))
+                ) : (
+                  <Empty>Your monthly plan will show here.</Empty>
+                )}
+                {upcoming.length ? <p className="text-muted-foreground text-sm">Approved and coming up: {upcoming.map((x) => x.title).join(" · ")}</p> : null}
+              </Panel>
+              <Panel eyebrow="Your leads" className="lg:col-span-3">
+                <div className="grid grid-cols-3 gap-2">
+                  <Stat label="This month" value={d.funnel.this_month} />
+                  <Stat label="Appointments (all time)" value={d.funnel.appointments} />
+                  <Stat label="Typical first reply" value={<span className="text-2xl">{mins(d.funnel.median_response_min)}</span>} />
+                </div>
+                {d.leads.length ? (
+                  <ul className="grid gap-1 text-sm">
+                    {d.leads.slice(0, 8).map((l) => (
+                      <li key={l.id} className="flex justify-between gap-2">
+                        <span>
+                          {l.first_name} · {SOURCE_LABEL[l.source] || l.source}
+                        </span>
+                        <span className="text-muted-foreground">{LEAD_STATUS_LABEL[l.status]}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <div className="flex flex-wrap items-center gap-2">
+                  <CopyButton text={d.client.form_url} label="Copy your inquiry form link" />
+                </div>
+              </Panel>
+            </Grid>
+
+            {posted.length ? (
+              <section className="grid gap-4">
+                <h2 className="text-2xl font-semibold tracking-tight">What went out</h2>
+                <div className="-mx-1 overflow-x-auto px-1">
+                  <table className="w-full min-w-[560px] text-sm">
+                    <thead>
+                      <tr className="text-muted-foreground border-b text-[11px] font-semibold tracking-[0.12em] uppercase">
+                        <th scope="col" className="pb-2 text-left">Post</th>
+                        <th scope="col" className="pb-2 pr-3 text-right">Views (7 days)</th>
+                        <th scope="col" className="pb-2 pr-3 text-right">Sends / 1K</th>
+                        <th scope="col" className="pb-2 text-right">Saves / 1K</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {posted.map((p) => {
+                        const r = d.results.posts.find((x) => x.content_id === p.id);
+                        return (
+                          <tr key={p.id} className="border-b last:border-0">
+                            <th scope="row" className="py-2.5 pr-3 text-left font-medium">
+                              {p.post_url ? (
+                                <a href={p.post_url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                                  {p.title}
+                                </a>
+                              ) : (
+                                p.title
+                              )}
+                              <span className="text-muted-foreground block text-xs font-normal">
+                                {PLATFORM_LABEL[p.platform] || p.platform} · {day(p.posted_at)}
+                              </span>
+                            </th>
+                            <td className="py-2.5 pr-3 text-right tabular-nums">{r?.d7 ? fmt(r.d7.views) : r?.d24 ? <span className="text-muted-foreground">{fmt(r.d24.views)} so far</span> : "—"}</td>
+                            <td className="py-2.5 pr-3 text-right tabular-nums">{r?.d7?.signals?.sends_per_1k ?? "—"}</td>
+                            <td className="py-2.5 text-right tabular-nums">{r?.d7?.signals?.saves_per_1k ?? "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            ) : null}
+
+            {d.tests.length ? (
+              <section className="grid gap-3">
+                <h2 className="text-2xl font-semibold tracking-tight">What we tested</h2>
+                {d.tests.map((t, i) => (
+                  <div key={i} className="bg-card rounded-xl border p-4 text-sm">
+                    <p className="font-medium">{t.title}</p>
+                    <p className="text-muted-foreground">{t.result?.verdict}</p>
+                  </div>
+                ))}
+              </section>
+            ) : null}
+
+            <section className="grid gap-4">
+              <h2 className="text-2xl font-semibold tracking-tight">Monthly report</h2>
+              {latestReport?.body ? (
+                <Panel>
+                  <ReportView body={latestReport.body} month={latestReport.month} />
+                </Panel>
+              ) : (
+                <Empty>Your first monthly report will appear here.</Empty>
+              )}
+              {d.reports.length > 1 ? <p className="text-muted-foreground text-sm">Earlier reports: {d.reports.slice(1).map((r) => monthLabel(r.month)).join(", ")}</p> : null}
+            </section>
+
+            {d.reviews.stats.count ? (
+              <section className="grid gap-2">
+                <h2 className="text-2xl font-semibold tracking-tight">Google reviews</h2>
+                <p className="text-sm">
+                  {d.reviews.stats.avg?.toFixed(1)} average from {d.reviews.stats.count} logged review{d.reviews.stats.count === 1 ? "" : "s"} · {d.reviews.stats.last_90d} in the last 90 days
+                </p>
+              </section>
+            ) : null}
+          </div>
+        )}
+      </main>
+      <Footer note={"Prepared by " + (d?.agency.name || "Meredith Brice Marketing") + ". This page is private to you; please don't share the link."} />
+    </div>
+  );
+}
+
+export default function Portal() {
+  return (
+    <ToastProvider>
+      <PortalApp />
+    </ToastProvider>
+  );
+}
